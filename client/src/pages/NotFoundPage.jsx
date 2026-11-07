@@ -1,12 +1,19 @@
-import { Link } from "react-router-dom";
-import PageContainer from "../components/PageContainer.jsx";
+import NotFound from "../components/NotFound.jsx";
+
+/**
+ * NotFoundPage: Handles 404 routes and invalid URLs using the reusable NotFound component.
+ */
 export default function NotFoundPage() {
   return (
-    <PageContainer eyebrow="404 · PAGE NOT FOUND" title="This space is empty.">
-      <p>We could not find that page. Let’s get you back on track.</p>
-      <Link className="button" to="/">
-        Back to Home <span aria-hidden="true">↗</span>
-      </Link>
-    </PageContainer>
+    <div className="container not-found-page-wrapper">
+      <NotFound
+        eyebrow="404 · PAGE NOT FOUND"
+        title="This space is empty."
+        message="We could not find the page you are looking for. The slot may have moved or does not exist. Let’s get you back on track."
+        actionTo="/"
+        actionText="Back to Home"
+        showDashboardLink={true}
+      />
+    </div>
   );
 }

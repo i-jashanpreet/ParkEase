@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import Button from "../components/Button.jsx";
 import FeatureCard from "../components/FeatureCard.jsx";
 import { apiRequest } from "../services/api.js";
 
@@ -42,12 +42,12 @@ export default function HomePage() {
             ease.
           </p>
           <div className="hero-actions">
-            <Link className="button" to="/register">
+            <Button to="/register" variant="accent">
               Get Started <span aria-hidden="true">↗</span>
-            </Link>
-            <Link className="button secondary" to="/login">
+            </Button>
+            <Button to="/login" variant="secondary">
               Login
-            </Link>
+            </Button>
           </div>
           <p className="tagline">Book smarter. Enter faster. Park better.</p>
         </div>
