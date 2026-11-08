@@ -1,5 +1,6 @@
 import PageContainer from "../components/PageContainer.jsx";
 import Button from "../components/Button.jsx";
+import Badge from "../components/Badge.jsx";
 
 /**
  * LoginPage: Placeholder view for user authentication.
@@ -14,7 +15,9 @@ export default function LoginPage() {
     >
       <div className="auth-placeholder-card">
         <div className="auth-placeholder-header">
-          <span className="auth-badge">Sprint 2 Milestone</span>
+          <Badge variant="accent" style={{ marginBottom: "12px" }}>
+            Sprint 2 Milestone
+          </Badge>
           <h3>User & Role Sign-In</h3>
           <p>
             Secure JWT authentication, password hashing, and role determination

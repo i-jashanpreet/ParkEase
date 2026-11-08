@@ -1,15 +1,19 @@
 /**
  * Reusable Loading component with spinner animation and accessibility labels.
+ * Supports inline, centered, and full-page layout modes.
  */
 export default function Loading({
   message = "Loading...",
   size = "md",
   fullPage = false,
+  inline = false,
+  centered = true,
   className = "",
 }) {
   const containerClass = [
     "loading-container",
     fullPage ? "loading-fullpage" : "",
+    inline ? "loading-inline" : centered ? "loading-centered" : "",
     `loading-${size}`,
     className,
   ]
