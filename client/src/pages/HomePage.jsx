@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import Button from "../components/Button.jsx";
 import FeatureCard from "../components/FeatureCard.jsx";
-import { apiRequest } from "../services/api.js";
+import { getHealthStatus } from "../services/healthService.js";
 
 export default function HomePage() {
   const [apiStatus, setApiStatus] = useState("Checking backend…");
   useEffect(() => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
-    apiRequest("/health", { signal: controller.signal })
+    getHealthStatus({ signal: controller.signal })
       .then((data) =>
         setApiStatus(
           data.success === true ? "API Connected" : "Backend unavailable",
