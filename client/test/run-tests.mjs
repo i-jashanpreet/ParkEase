@@ -9,6 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const testEntries = [
   { name: "UI Components", file: path.join(__dirname, "components.test.js") },
   { name: "API Client & Services", file: path.join(__dirname, "apiClient.test.js") },
+  { name: "Auth Forms & Validation", file: path.join(__dirname, "authForms.test.js") },
 ];
 
 let allPassed = true;

@@ -2,7 +2,7 @@ import { useId } from "react";
 
 /**
  * Reusable Input component supporting standard HTML input types,
- * labels, helper text, error states, and icon adornments.
+ * labels, helper text, error states, and icon/button adornments.
  */
 export default function Input({
   label,
@@ -21,6 +21,7 @@ export default function Input({
   autoComplete,
   icon = null,
   iconPosition = "left",
+  endAdornment = null,
   className = "",
   inputClassName = "",
   ...rest
@@ -34,6 +35,7 @@ export default function Input({
   const hasError = Boolean(error);
   const isIconLeft = icon && iconPosition === "left";
   const isIconRight = icon && iconPosition === "right";
+  const hasEndAdornment = Boolean(endAdornment);
 
   const wrapperClass = [
     "form-group",
@@ -48,6 +50,7 @@ export default function Input({
     "form-input",
     isIconLeft ? "form-input-icon-left" : "",
     isIconRight ? "form-input-icon-right" : "",
+    hasEndAdornment ? "form-input-with-end-adornment" : "",
     hasError ? "form-input-error" : "",
     inputClassName,
   ]
@@ -92,6 +95,12 @@ export default function Input({
           <span className="input-icon input-icon-right" aria-hidden="true">
             {icon}
           </span>
+        )}
+
+        {endAdornment && (
+          <div className="input-end-adornment">
+            {endAdornment}
+          </div>
         )}
       </div>
 
