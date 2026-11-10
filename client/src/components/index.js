@@ -15,3 +15,4 @@ export { default as PageContainer } from "./PageContainer.jsx";
 export { default as Navbar } from "./Navbar.jsx";
 export { default as Footer } from "./Footer.jsx";
 export { default as NotFound } from "./NotFound.jsx";
+export { default as ProtectedRoute } from "./ProtectedRoute.jsx";

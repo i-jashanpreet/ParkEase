@@ -1,17 +1,22 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import Input from "../components/Input.jsx";
 import Button from "../components/Button.jsx";
 import Modal from "../components/Modal.jsx";
 import ErrorMessage from "../components/ErrorMessage.jsx";
 import Badge from "../components/Badge.jsx";
 import { validateLoginForm } from "../utils/validation.js";
+import useAuth from "../hooks/useAuth.js";
 
 /**
  * LoginPage: Complete authentication login UI with client-side validation,
- * password visibility toggling, accessible error handling, and placeholder boundary responses.
+ * password visibility toggling, accessible error handling, and auth service integration.
  */
 export default function LoginPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { login, isAuthenticated } = useAuth();
+
   const [formData, setFormData] = useState({
     email: "",
     password: "",
@@ -23,6 +28,14 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState(null);
   const [forgotModalOpen, setForgotModalOpen] = useState(false);
+
+  // If already authenticated, redirect to target or dashboard
+  useEffect(() => {
+    if (isAuthenticated) {
+      const destination = location.state?.from?.pathname || "/dashboard";
+      navigate(destination, { replace: true });
+    }
+  }, [isAuthenticated, location.state, navigate]);
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -45,7 +58,7 @@ export default function LoginPage() {
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setStatusMessage(null);
 
@@ -55,17 +68,33 @@ export default function LoginPage() {
       return;
     }
 
-    // Client-side validation passed.
-    // In accordance with Milestone 4 boundaries, do not connect to backend or store fake tokens.
     setIsLoading(true);
-    setTimeout(() => {
+    try {
+      await login({ email: formData.email, password: formData.password });
+      const destination = location.state?.from?.pathname || "/dashboard";
+      navigate(destination, { replace: true });
+    } catch (err) {
+      if (err.status === 404) {
+        setStatusMessage({
+          type: "warning",
+          title: "Authentication Unavailable",
+          body: "Backend authentication endpoints are not implemented yet (pending Sprint 2 backend release). Login is currently unavailable.",
+        });
+      } else if (err.isNetworkError) {
+        setStatusMessage({
+          type: "warning",
+          title: "Server Unavailable",
+          body: "Unable to connect to the authentication server. Please check your network connection or verify that the backend server is running.",
+        });
+      } else {
+        setErrors((prev) => ({
+          ...prev,
+          form: err.message || "Invalid email or password.",
+        }));
+      }
+    } finally {
       setIsLoading(false);
-      setStatusMessage({
-        type: "success",
-        title: "Validation Successful",
-        body: "All inputs verified. Backend authentication integration (Sprint 2) will be connected in Milestone 5.",
-      });
-    }, 600);
+    }
   };
 
   return (

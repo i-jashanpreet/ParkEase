@@ -378,6 +378,26 @@ h4,
   font-weight: 700;
 }
 
+.nav-user-greeting {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-primary);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.user-greeting-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-logout-btn {
+  cursor: pointer;
+}
+
 /* Hamburger toggle for mobile */
 .mobile-menu-toggle {
   display: none;
@@ -943,6 +963,12 @@ h2 {
   color: #0369a1;
 }
 
+.auth-status-banner.warning {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #b45309;
+}
+
 .auth-role-notice {
   display: flex;
   align-items: center;
@@ -1087,6 +1113,52 @@ h2 {
   flex-wrap: wrap;
   justify-content: center;
   gap: var(--space-3);
+}
+
+/* ==========================================================================
+   Access Denied / Unauthorized (403) Component
+   ========================================================================== */
+
+.unauthorized-page-container {
+  padding-top: var(--space-16);
+  padding-bottom: var(--space-16);
+}
+
+.unauthorized-card {
+  max-width: 540px;
+  margin: 0 auto;
+  text-align: center;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-10) var(--space-8);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.unauthorized-title {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--color-primary);
+  margin-top: var(--space-4);
+  margin-bottom: var(--space-2);
+  letter-spacing: -0.5px;
+}
+
+.unauthorized-text {
+  font-size: 15px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin-bottom: var(--space-6);
+}
+
+.unauthorized-actions {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: center;
+  flex-wrap: wrap;
 }
 
 /* ==========================================================================

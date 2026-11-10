@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { Link, NavLink, Outlet } from "react-router-dom";
+import useAuth from "../hooks/useAuth.js";
 
 /**
  * DashboardLayout: Application layout for dashboard and management views.
  * Features a responsive dark navy sidebar, top control header with status,
- * and a main content viewport.
+ * user session pill, logout action, and a main content viewport.
  */
 export default function DashboardLayout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { user, logout } = useAuth();
 
   const toggleSidebar = () => {
     setSidebarOpen((prev) => !prev);
@@ -16,6 +18,16 @@ export default function DashboardLayout({ children }) {
   const closeSidebar = () => {
     setSidebarOpen(false);
   };
+
+  const userInitials = user?.name
+    ? user.name
+        .split(" ")
+        .map((part) => part[0])
+        .filter(Boolean)
+        .slice(0, 2)
+        .join("")
+        .toUpperCase()
+    : "PE";
 
   return (
     <div className="dashboard-layout">
@@ -149,15 +161,26 @@ export default function DashboardLayout({ children }) {
           <div className="dashboard-header-actions">
             <div className="dashboard-status-indicator">
               <span className="status-dot online" aria-hidden="true" />
-              <span>Foundation Active</span>
+              <span>{user ? "Session Active" : "Foundation Active"}</span>
             </div>
             <Link to="/" className="button button-small button-outline">
               Public Site ↗
             </Link>
-            <div className="user-avatar-pill" title="Foundation User Preview">
-              <span className="user-avatar-initial">JS</span>
-              <span className="user-avatar-role">Frontend</span>
+            <div
+              className="user-avatar-pill"
+              title={user ? `${user.name || "User"} (${user.role || "MEMBER"})` : "ParkEase User"}
+            >
+              <span className="user-avatar-initial">{userInitials}</span>
+              <span className="user-avatar-role">{user?.role || "GUEST"}</span>
             </div>
+            <button
+              type="button"
+              className="button button-small button-outline"
+              onClick={logout}
+              title="Sign out of ParkEase"
+            >
+              Sign Out
+            </button>
           </div>
         </header>
 

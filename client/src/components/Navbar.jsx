@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { Link, NavLink } from "react-router-dom";
+import useAuth from "../hooks/useAuth.js";
+import Badge from "./Badge.jsx";
 
 /**
  * Reusable Navbar component with responsive desktop/mobile navigation,
- * active route indicators, and accessible mobile drawer toggle.
+ * active route indicators, accessible mobile drawer toggle, and authentication awareness.
  */
 export default function Navbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { user, isAuthenticated, logout } = useAuth();
 
   const toggleMobileMenu = () => {
     setMobileMenuOpen((prev) => !prev);
@@ -14,6 +17,11 @@ export default function Navbar() {
 
   const closeMobileMenu = () => {
     setMobileMenuOpen(false);
+  };
+
+  const handleLogout = () => {
+    closeMobileMenu();
+    logout();
   };
 
   return (
@@ -56,20 +64,43 @@ export default function Navbar() {
           >
             Dashboard
           </NavLink>
-          <NavLink
-            to="/login"
-            onClick={closeMobileMenu}
-            className={({ isActive }) => (isActive ? "active" : "")}
-          >
-            Login
-          </NavLink>
-          <NavLink
-            className="button button-small button-accent"
-            to="/register"
-            onClick={closeMobileMenu}
-          >
-            Register <span aria-hidden="true">↗</span>
-          </NavLink>
+
+          {isAuthenticated ? (
+            <>
+              <span className="nav-user-greeting">
+                <span className="user-greeting-name">{user?.name || user?.email || "User"}</span>
+                {user?.role && (
+                  <Badge variant="neutral" size="sm">
+                    {user.role}
+                  </Badge>
+                )}
+              </span>
+              <button
+                type="button"
+                className="button button-small button-outline nav-logout-btn"
+                onClick={handleLogout}
+              >
+                Sign Out
+              </button>
+            </>
+          ) : (
+            <>
+              <NavLink
+                to="/login"
+                onClick={closeMobileMenu}
+                className={({ isActive }) => (isActive ? "active" : "")}
+              >
+                Login
+              </NavLink>
+              <NavLink
+                className="button button-small button-accent"
+                to="/register"
+                onClick={closeMobileMenu}
+              >
+                Register <span aria-hidden="true">↗</span>
+              </NavLink>
+            </>
+          )}
         </div>
       </nav>
     </header>

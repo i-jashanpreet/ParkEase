@@ -1,17 +1,21 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import Input from "../components/Input.jsx";
 import Button from "../components/Button.jsx";
 import Modal from "../components/Modal.jsx";
 import ErrorMessage from "../components/ErrorMessage.jsx";
 import Badge from "../components/Badge.jsx";
 import { validateRegisterForm } from "../utils/validation.js";
+import useAuth from "../hooks/useAuth.js";
 
 /**
  * RegisterPage: Complete user registration UI with client-side validation,
- * password matching, terms agreement, accessible error presentation, and boundary responses.
+ * password matching, terms agreement, accessible error presentation, and auth service integration.
  */
 export default function RegisterPage() {
+  const navigate = useNavigate();
+  const { register, isAuthenticated } = useAuth();
+
   const [formData, setFormData] = useState({
     name: "",
     email: "",
@@ -27,6 +31,13 @@ export default function RegisterPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState(null);
   const [termsModalOpen, setTermsModalOpen] = useState(false);
+
+  // If already authenticated, redirect to dashboard
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate("/dashboard", { replace: true });
+    }
+  }, [isAuthenticated, navigate]);
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -48,7 +59,7 @@ export default function RegisterPage() {
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setStatusMessage(null);
 
@@ -58,17 +69,41 @@ export default function RegisterPage() {
       return;
     }
 
-    // Client-side validation passed.
-    // In accordance with Milestone 4 boundaries, do not connect to backend or create fake tokens.
     setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      await register({
+        name: formData.name.trim(),
+        email: formData.email.trim(),
+        phone: formData.phone.trim() || undefined,
+        password: formData.password,
+      });
       setStatusMessage({
         type: "success",
-        title: "Validation Successful",
-        body: "Registration details verified. Backend registration endpoint (Sprint 2) will be connected in Milestone 5.",
+        title: "Registration Successful",
+        body: "Your ParkEase account has been registered! You may now sign in.",
       });
-    }, 600);
+    } catch (err) {
+      if (err.status === 404) {
+        setStatusMessage({
+          type: "warning",
+          title: "Registration Unavailable",
+          body: "Backend registration endpoints are not implemented yet (pending Sprint 2 backend release). Registration is currently unavailable.",
+        });
+      } else if (err.isNetworkError) {
+        setStatusMessage({
+          type: "warning",
+          title: "Server Unavailable",
+          body: "Unable to connect to the registration server. Please check your network connection or verify that the backend server is running.",
+        });
+      } else {
+        setErrors((prev) => ({
+          ...prev,
+          form: err.message || "Registration failed. Please try again.",
+        }));
+      }
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

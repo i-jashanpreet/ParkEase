@@ -6,6 +6,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import LoginPage from "../src/pages/LoginPage.jsx";
 import RegisterPage from "../src/pages/RegisterPage.jsx";
+import AuthProvider from "../src/context/AuthContext.jsx";
 import {
   validateEmail,
   validatePassword,
@@ -18,7 +19,13 @@ import {
 } from "../src/utils/validation.js";
 
 function renderWithRouter(element) {
-  return renderToStaticMarkup(React.createElement(MemoryRouter, null, element));
+  return renderToStaticMarkup(
+    React.createElement(
+      MemoryRouter,
+      null,
+      React.createElement(AuthProvider, null, element)
+    )
+  );
 }
 
 test("Validation: Email format validation rules", () => {

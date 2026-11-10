@@ -10,6 +10,7 @@ const testEntries = [
   { name: "UI Components", file: path.join(__dirname, "components.test.js") },
   { name: "API Client & Services", file: path.join(__dirname, "apiClient.test.js") },
   { name: "Auth Forms & Validation", file: path.join(__dirname, "authForms.test.js") },
+  { name: "Auth Context & Protected Routes", file: path.join(__dirname, "authContext.test.js") },
 ];
 
 let allPassed = true;
