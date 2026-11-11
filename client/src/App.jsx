@@ -1,6 +1,7 @@
 import { Routes, Route } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext.jsx";
 import ProtectedRoute from "./components/ProtectedRoute.jsx";
+import { ROLES } from "./constants/roles.js";
 import PublicLayout from "./layouts/PublicLayout.jsx";
 import DashboardLayout from "./layouts/DashboardLayout.jsx";
 import HomePage from "./pages/HomePage.jsx";
@@ -25,10 +26,10 @@ export default function App() {
           <Route path="*" element={<NotFoundPage />} />
         </Route>
 
-        {/* Protected Dashboard layout route tree */}
+        {/* Protected Dashboard layout route tree - strictly restricted to authenticated USER role */}
         <Route
           element={
-            <ProtectedRoute>
+            <ProtectedRoute allowedRoles={[ROLES.USER]}>
               <DashboardLayout />
             </ProtectedRoute>
           }
