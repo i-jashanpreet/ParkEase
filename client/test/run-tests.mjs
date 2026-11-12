@@ -12,6 +12,7 @@ const testEntries = [
   { name: "Auth Forms & Validation", file: path.join(__dirname, "authForms.test.js") },
   { name: "Auth Context & Protected Routes", file: path.join(__dirname, "authContext.test.js") },
   { name: "User Dashboard & Bookings", file: path.join(__dirname, "userDashboard.test.js") },
+  { name: "Mall Discovery & Details", file: path.join(__dirname, "mallDiscovery.test.js") },
 ];
 
 let allPassed = true;
