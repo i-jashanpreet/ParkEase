@@ -171,14 +171,21 @@ export default function MallDetailsPage({
               actions={
                 <div className="page-actions">
                   <Button
+                    to={`/malls/${mall.id}/parking`}
                     variant="accent"
+                    size="sm"
+                  >
+                    🅿 View Parking Availability
+                  </Button>
+                  <Button
+                    variant="outline"
                     size="sm"
                     onClick={() => {
                       setReservationNotice(null);
                       setReservationModalOpen(true);
                     }}
                   >
-                    🅿 Find &amp; Reserve Parking
+                    Find &amp; Reserve Parking
                   </Button>
                 </div>
               }
@@ -280,17 +287,27 @@ export default function MallDetailsPage({
                   <p style={{ fontSize: "13px", color: "var(--color-text-secondary)", lineHeight: "1.5", marginBottom: "16px" }}>
                     Select your preferred basement level and lock in a parking bay before arriving at {mall.name}.
                   </p>
-                  <Button
-                    variant="accent"
-                    size="md"
-                    onClick={() => {
-                      setReservationNotice(null);
-                      setReservationModalOpen(true);
-                    }}
-                    style={{ width: "100%" }}
-                  >
-                    🅿 Find Parking at {mall.name}
-                  </Button>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                    <Button
+                      to={`/malls/${mall.id}/parking`}
+                      variant="accent"
+                      size="md"
+                      style={{ width: "100%" }}
+                    >
+                      🅿 View Parking Availability
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="md"
+                      onClick={() => {
+                        setReservationNotice(null);
+                        setReservationModalOpen(true);
+                      }}
+                      style={{ width: "100%" }}
+                    >
+                      🅿 Find Parking at {mall.name}
+                    </Button>
+                  </div>
                 </Card>
 
                 {/* Contact Card (if provided by backend) */}
