@@ -9,7 +9,7 @@ import useAuth from "../hooks/useAuth.js";
  */
 export default function DashboardLayout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const { user, logout } = useAuth();
+  const { user, logout, logoutError, isSigningOut } = useAuth();
 
   const toggleSidebar = () => {
     setSidebarOpen((prev) => !prev);
@@ -189,15 +189,17 @@ export default function DashboardLayout({ children }) {
               type="button"
               className="button button-small button-outline"
               onClick={logout}
+              disabled={isSigningOut}
               title="Sign out of ParkEase"
             >
-              Sign Out
+              {isSigningOut ? "Signing out…" : "Sign Out"}
             </button>
           </div>
         </header>
 
         {/* Dashboard main viewport */}
         <main id="dashboard-main" className="dashboard-main">
+          {logoutError && <p className="form-error-text" role="alert">{logoutError}</p>}
           {children || <Outlet />}
         </main>
       </div>

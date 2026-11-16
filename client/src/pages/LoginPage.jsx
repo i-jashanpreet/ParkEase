@@ -15,12 +15,11 @@ import useAuth from "../hooks/useAuth.js";
 export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login, isAuthenticated } = useAuth();
+  const { login, isAuthenticated, error: sessionError } = useAuth();
 
   const [formData, setFormData] = useState({
     email: "",
     password: "",
-    rememberMe: false,
   });
 
   const [errors, setErrors] = useState({});
@@ -78,7 +77,7 @@ export default function LoginPage() {
         setStatusMessage({
           type: "warning",
           title: "Authentication Unavailable",
-          body: "Backend authentication endpoints are not implemented yet (pending Sprint 2 backend release). Login is currently unavailable.",
+          body: "The configured server does not expose the sign-in endpoint.",
         });
       } else if (err.isNetworkError) {
         setStatusMessage({
@@ -131,6 +130,7 @@ export default function LoginPage() {
           )}
 
           {/* Temporary Milestone Boundary Response */}
+          {sessionError && !statusMessage && !errors.form && <ErrorMessage message={sessionError} />}
           {statusMessage && (
             <div
               className={`auth-status-banner ${statusMessage.type}`}
@@ -229,18 +229,6 @@ export default function LoginPage() {
             />
 
             <div className="auth-options-row">
-              <label className="checkbox-control">
-                <input
-                  type="checkbox"
-                  name="rememberMe"
-                  checked={formData.rememberMe}
-                  onChange={handleChange}
-                  className="checkbox-input"
-                  disabled={isLoading}
-                />
-                <span>Remember me</span>
-              </label>
-
               <button
                 type="button"
                 className="auth-text-link"

@@ -1,6 +1,8 @@
 import { Routes, Route } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext.jsx";
 import ProtectedRoute from "./components/ProtectedRoute.jsx";
+import useAuth from "./hooks/useAuth.js";
+import AccountDashboard from "./pages/AccountDashboard.jsx";
 import { ROLES } from "./constants/roles.js";
 import PublicLayout from "./layouts/PublicLayout.jsx";
 import DashboardLayout from "./layouts/DashboardLayout.jsx";
@@ -12,6 +14,11 @@ import LoginPage from "./pages/LoginPage.jsx";
 import RegisterPage from "./pages/RegisterPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import NotFoundPage from "./pages/NotFoundPage.jsx";
+
+function RoleDashboard() {
+  const { user } = useAuth();
+  return user.role === ROLES.USER ? <DashboardPage /> : <AccountDashboard key={user._id} />;
+}
 
 /**
  * Main application router defining public and dashboard layout hierarchies,
@@ -33,15 +40,15 @@ export default function App() {
           <Route path="*" element={<NotFoundPage />} />
         </Route>
 
-        {/* Protected Dashboard layout route tree - strictly restricted to authenticated USER role */}
+        {/* Protected dashboard layout */}
         <Route
           element={
-            <ProtectedRoute allowedRoles={[ROLES.USER]}>
+            <ProtectedRoute>
               <DashboardLayout />
             </ProtectedRoute>
           }
         >
-          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/dashboard" element={<RoleDashboard />} />
         </Route>
       </Routes>
     </AuthProvider>

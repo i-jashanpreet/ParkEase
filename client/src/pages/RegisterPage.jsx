@@ -4,7 +4,7 @@ import Input from "../components/Input.jsx";
 import Button from "../components/Button.jsx";
 import Modal from "../components/Modal.jsx";
 import ErrorMessage from "../components/ErrorMessage.jsx";
-import Badge from "../components/Badge.jsx";
+import Select from "../components/Select.jsx";
 import { validateRegisterForm } from "../utils/validation.js";
 import useAuth from "../hooks/useAuth.js";
 
@@ -18,6 +18,7 @@ export default function RegisterPage() {
 
   const [formData, setFormData] = useState({
     name: "",
+    role: "USER",
     email: "",
     phone: "",
     password: "",
@@ -73,23 +74,13 @@ export default function RegisterPage() {
     try {
       await register({
         name: formData.name.trim(),
+        role: formData.role,
         email: formData.email.trim(),
         phone: formData.phone.trim() || undefined,
         password: formData.password,
       });
-      setStatusMessage({
-        type: "success",
-        title: "Registration Successful",
-        body: "Your ParkEase account has been registered! You may now sign in.",
-      });
     } catch (err) {
-      if (err.status === 404) {
-        setStatusMessage({
-          type: "warning",
-          title: "Registration Unavailable",
-          body: "Backend registration endpoints are not implemented yet (pending Sprint 2 backend release). Registration is currently unavailable.",
-        });
-      } else if (err.isNetworkError) {
+      if (err.isNetworkError) {
         setStatusMessage({
           type: "warning",
           title: "Server Unavailable",
@@ -124,16 +115,6 @@ export default function RegisterPage() {
             </p>
           </div>
 
-          {/* Account Role Notice */}
-          <div className="auth-role-notice" style={{ marginBottom: "16px" }}>
-            <Badge variant="neutral" size="sm">
-              Standard User
-            </Badge>
-            <span>
-              Driver &amp; visitor account. Mall Owners &amp; Guards are provisioned administratively.
-            </span>
-          </div>
-
           {/* Form-level Error Message */}
           {errors.form && (
             <ErrorMessage
@@ -165,6 +146,9 @@ export default function RegisterPage() {
 
           {/* Registration Form */}
           <form className="auth-form" onSubmit={handleSubmit} noValidate>
+            <Select label="Account type" name="role" value={formData.role} onChange={handleChange}
+              disabled={isLoading} options={[{ value: "USER", label: "Driver" }, { value: "MALL_OWNER", label: "Mall owner" }]}
+              helperText={formData.role === "MALL_OWNER" ? "Mall-owner accounts require admin approval." : undefined} />
             <Input
               label="Full Name"
               id="register-name"
