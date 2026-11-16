@@ -1,0 +1,50 @@
+export const USER_STATUS = Object.freeze({
+  PENDING_APPROVAL: "PENDING_APPROVAL",
+  ACTIVE: "ACTIVE",
+  REJECTED: "REJECTED",
+  SUSPENDED: "SUSPENDED",
+});
+
+export const MALL_STATUS = Object.freeze({
+  PENDING: "PENDING",
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
+  INACTIVE: "INACTIVE",
+});
+
+export const SLOT_STATUS = Object.freeze({
+  AVAILABLE: "AVAILABLE",
+  RESERVED: "RESERVED",
+  OCCUPIED: "OCCUPIED",
+  MAINTENANCE: "MAINTENANCE",
+});
+
+export const BOOKING_STATUS = Object.freeze({
+  CONFIRMED: "CONFIRMED",
+  ACTIVE: "ACTIVE",
+  COMPLETED: "COMPLETED",
+  CANCELLED: "CANCELLED",
+  EXPIRED: "EXPIRED",
+});
+
+export const BILLING_STATUS = Object.freeze({
+  PENDING: "PENDING",
+  GENERATED: "GENERATED",
+  WAIVED: "WAIVED",
+});
+
+export const QR_TOKEN_STATUS = Object.freeze({
+  ACTIVE: "ACTIVE",
+  CONSUMED: "CONSUMED",
+  REVOKED: "REVOKED",
+  EXPIRED: "EXPIRED",
+});
+
+export default Object.freeze({
+  USER_STATUS,
+  MALL_STATUS,
+  SLOT_STATUS,
+  BOOKING_STATUS,
+  BILLING_STATUS,
+  QR_TOKEN_STATUS,
+});
