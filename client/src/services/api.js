@@ -1,99 +1,8 @@
 import { ApiError, STATUS_MESSAGES } from "./apiError.js";
 
-const TOKEN_STORAGE_KEY = "parkease_auth_token";
-let inMemoryToken = null;
-let storagePersistenceEnabled = false;
-let unauthorizedHandler = null;
-
-/**
- * Flexible token storage adapter.
- * Supports:
- * 1. In-memory token state (default, avoids assuming localStorage is the final approach).
- * 2. Optional browser storage persistence (localStorage/sessionStorage).
- * 3. HTTP-only cookie-based sessions (where client does not store tokens and uses credentials: "include").
- */
-export const tokenStorage = {
-  get() {
-    if (inMemoryToken) {
-      return inMemoryToken;
-    }
-
-    if (storagePersistenceEnabled && typeof window !== "undefined" && window.localStorage) {
-      try {
-        const stored = window.localStorage.getItem(TOKEN_STORAGE_KEY);
-        if (stored) {
-          inMemoryToken = stored;
-          return stored;
-        }
-      } catch {
-        // Storage access may fail in private browsing or restricted contexts
-      }
-    }
-
-    return null;
-  },
-
-  set(token) {
-    inMemoryToken = token ? String(token).trim() : null;
-
-    if (storagePersistenceEnabled && typeof window !== "undefined" && window.localStorage) {
-      try {
-        if (inMemoryToken) {
-          window.localStorage.setItem(TOKEN_STORAGE_KEY, inMemoryToken);
-        } else {
-          window.localStorage.removeItem(TOKEN_STORAGE_KEY);
-        }
-      } catch {
-        // Ignore storage access errors
-      }
-    }
-  },
-
-  clear() {
-    this.set(null);
-  },
-
-  enablePersistence(enabled = true) {
-    storagePersistenceEnabled = Boolean(enabled);
-  },
-
-  isPersistenceEnabled() {
-    return storagePersistenceEnabled;
-  },
-};
-
-/**
- * Retrieve the current active auth token (if using Bearer token authentication).
- */
-export function getAuthToken() {
-  return tokenStorage.get();
-}
-
-/**
- * Sets the active authentication token in memory (and persistent storage if enabled).
- * Pass null or empty string to clear the token.
- */
-export function setAuthToken(token) {
-  tokenStorage.set(token);
-}
-
-/**
- * Clears the active authentication token.
- */
-export function clearAuthToken() {
-  tokenStorage.clear();
-}
-
-/**
- * Registers a callback invoked whenever any request receives an HTTP 401 Unauthorized status.
- */
-export function setUnauthorizedHandler(callback) {
-  unauthorizedHandler = typeof callback === "function" ? callback : null;
-}
-
 /**
  * Resolves the backend API base URL from Vite environment variables,
- * falling back to local port 5000 in development.
+ * falling back to local port 5001 in development.
  */
 export function getApiBaseUrl() {
   const envUrl =
@@ -103,7 +12,7 @@ export function getApiBaseUrl() {
         ? globalThis.process.env.VITE_API_URL
         : undefined;
 
-  return (envUrl || "http://localhost:5000/api").replace(/\/$/, "");
+  return (envUrl || "http://localhost:5001/api").replace(/\/$/, "");
 }
 
 /**
@@ -145,11 +54,6 @@ export async function request(path, options = {}) {
     Accept: "application/json",
     ...customHeaders,
   };
-
-  const activeToken = getAuthToken();
-  if (activeToken && !headers.Authorization && !headers.authorization) {
-    headers.Authorization = `Bearer ${activeToken}`;
-  }
 
   let serializedBody = body;
   if (
@@ -214,16 +118,6 @@ export async function request(path, options = {}) {
   }
 
   if (!response.ok) {
-    if (response.status === 401) {
-      if (typeof unauthorizedHandler === "function") {
-        try {
-          unauthorizedHandler();
-        } catch {
-          // Prevent handler failure from suppressing the ApiError
-        }
-      }
-    }
-
     const serverMessage =
       responseData && typeof responseData === "object" && typeof responseData.message === "string"
         ? responseData.message
@@ -267,11 +161,6 @@ export const apiClient = {
   delete(path, options = {}) {
     return request(path, { ...options, method: "DELETE" });
   },
-  tokenStorage,
-  setToken: setAuthToken,
-  getToken: getAuthToken,
-  clearToken: clearAuthToken,
-  onUnauthorized: setUnauthorizedHandler,
 };
 
 /**

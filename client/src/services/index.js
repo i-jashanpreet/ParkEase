@@ -4,26 +4,9 @@ export {
   apiRequest,
   getApiBaseUrl,
   buildUrl,
-  tokenStorage,
-  getAuthToken,
-  setAuthToken,
-  clearAuthToken,
-  setUnauthorizedHandler,
 } from "./api.js";
 export { ApiError, normalizeError, STATUS_MESSAGES } from "./apiError.js";
 export { default as healthService, getHealthStatus } from "./healthService.js";
-export {
-  default as authService,
-  AUTH_SERVICE_STATUS,
-  PENDING_AUTH_ROUTES,
-  isBackendAuthAvailable,
-  setBackendAuthAvailable,
-  login,
-  register,
-  getCurrentUser,
-  logout,
-  normalizeAuthResponse,
-} from "./authService.js";
 export {
   default as mallService,
   MALL_SERVICE_STATUS,

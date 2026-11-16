@@ -1,4 +1,4 @@
-import apiClient from "./api.js";
+import { sessionRequest } from "./authService.js";
 
 /**
  * Booking & Verification Service (Sprint 4 Milestone)
@@ -93,7 +93,7 @@ export async function getUserBookings(options = {}) {
   }
 
   try {
-    const response = await apiClient.get(PENDING_BOOKING_ROUTES.LIST_BOOKINGS, options);
+    const response = await sessionRequest(PENDING_BOOKING_ROUTES.LIST_BOOKINGS, { ...options, method: "GET" });
     const normalized = normalizeBookingsResponse(response);
     return { ...normalized, isPendingBackend: false };
   } catch (err) {

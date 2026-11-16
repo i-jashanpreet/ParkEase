@@ -9,7 +9,7 @@ import Badge from "./Badge.jsx";
  */
 export default function Navbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const { user, isAuthenticated, logout } = useAuth();
+  const { user, isAuthenticated, logout, logoutError, isSigningOut } = useAuth();
 
   const toggleMobileMenu = () => {
     setMobileMenuOpen((prev) => !prev);
@@ -86,8 +86,9 @@ export default function Navbar() {
                 type="button"
                 className="button button-small button-outline nav-logout-btn"
                 onClick={handleLogout}
+                disabled={isSigningOut}
               >
-                Sign Out
+                {isSigningOut ? "Signing out…" : "Sign Out"}
               </button>
             </>
           ) : (
@@ -110,6 +111,7 @@ export default function Navbar() {
           )}
         </div>
       </nav>
+      {logoutError && <p className="container form-error-text" role="alert">{logoutError}</p>}
     </header>
   );
 }

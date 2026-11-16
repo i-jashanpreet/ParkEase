@@ -3395,3 +3395,21 @@ h2 {
     scroll-behavior: auto !important;
   }
 }
+
+.approval-panel {
+  display: grid;
+  gap: 16px;
+  justify-items: start;
+}
+
+.approval-panel .card {
+  width: 100%;
+}
+
+.owner-actions,
+.account-status-row {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
