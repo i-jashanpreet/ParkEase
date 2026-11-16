@@ -3,7 +3,7 @@
 **Smart Mall Parking Intelligence System**
 Book smarter. Enter faster. Park better.
 
-ParkEase is a four-person college project. This repository currently contains only the shared MERN foundation. Parking discovery, reservations, QR verification, billing, and analytics are **planned**, not implemented.
+ParkEase is a mall parking management project. This repository contains the MERN foundation and authentication and owner account approval. Parking discovery, reservations, QR verification, billing, and analytics are **planned**, not implemented.
 
 ## Tech stack
 
@@ -11,14 +11,14 @@ ParkEase is a four-person college project. This repository currently contains on
 - Express.js — REST API.
 - React.js with Vite — browser UI and development server.
 - Node.js — JavaScript backend runtime.
-- Plain CSS and JavaScript throughout; no authentication or business schemas yet.
+- Plain CSS and JavaScript throughout; authentication models and utilities live in the server workspace.
 
 ## Architecture
 
 ```text
 React Frontend :5173
       ↓ fetch GET /api/health
-Express REST API :5000
+Express REST API :5001
       ↓ Routes → Controllers
 Business Logic (future services)
       ↓ Mongoose
@@ -51,7 +51,7 @@ ParkEase/
 │   │   ├── constants/roles.js
 │   │   ├── controllers/healthController.js
 │   │   ├── middleware/   # JSON 404 and centralized errors
-│   │   ├── models/       # No schemas yet
+│   │   ├── models/       # User and RefreshToken schemas
 │   │   ├── routes/
 │   │   ├── services/     # No feature logic yet
 │   │   ├── utils/
@@ -71,10 +71,10 @@ Empty reserved folders contain `.gitkeep` so teammates receive the same structur
 
 ## Local setup
 
-Install Node.js **22.12 or newer** and npm. Start a local MongoDB service, or prepare a MongoDB Atlas URI with network access configured.
+Install Node.js **22.12 or newer** and npm. Start a local MongoDB replica set (see [replica set setup](docs/MILESTONE_1_PLAN.md#3-required-environment-variables--local-mongodb-replica-set-setup)) or use a transaction-capable Atlas deployment. Registration and refresh session changes use transactions.
 
 ```bash
-git clone https://github.com/oceankumar/ParkEase.git
+git clone https://github.com/itzshikharofficial12/ParkEase.git
 cd ParkEase
 npm run install-all
 cp client/.env.example client/.env
@@ -86,18 +86,19 @@ On Windows, copy the example files using your editor or `Copy-Item` in PowerShel
 `client/.env`:
 
 ```dotenv
-VITE_API_URL=http://localhost:5000/api
+VITE_API_URL=http://localhost:5001/api
 ```
 
 `server/.env`:
 
 ```dotenv
-PORT=5000
-MONGODB_URI=mongodb://127.0.0.1:27017/parkease
+PORT=5001
+MONGODB_URI=mongodb://127.0.0.1:27017/parkease?replicaSet=rs0
 CLIENT_URL=http://localhost:5173
+JWT_ACCESS_SECRET=replace-with-a-random-32-byte-secret
 ```
 
-Replace `MONGODB_URI` with your own Atlas URI if needed. Never commit credentials or `.env` files. Variables prefixed with `VITE_` are public browser configuration and must never hold secrets. Restart development servers after changing environment files.
+Set `JWT_ACCESS_SECRET` to a generated secret of at least 32 bytes before calling the auth APIs. Replace `MONGODB_URI` with your Atlas URI if applicable. Never commit credentials or `.env` files. Variables prefixed with `VITE_` are public browser configuration and must never hold secrets. Restart development servers after changing environment files.
 
 With MongoDB running:
 
@@ -106,14 +107,14 @@ npm run dev
 ```
 
 - Frontend: http://localhost:5173
-- Backend: http://localhost:5000
-- Health API: http://localhost:5000/api/health
+- Backend: http://localhost:5001
+- Health API: http://localhost:5001/api/health
 
 The frontend shows **API Connected** after a successful health request, or **Backend unavailable** if it cannot reach the API within five seconds. This indicator checks once on page load; reload after starting the backend. The parking illustration is conceptual and contains no live availability data.
 
 If MongoDB cannot connect, the backend exits with a safe startup error. Check MongoDB is running, the URI is valid, and Atlas network access permits your machine. No credentials are printed. The frontend can be started separately while the database is unavailable.
 
-On macOS, AirPlay may already use port `5000`. If so, set `PORT=5001` in `server/.env` and `VITE_API_URL=http://localhost:5001/api` in `client/.env`, then restart both servers.
+The frontend defaults to port `5001` for the API. If you use a different backend port, update `VITE_API_URL` in `client/.env` and restart Vite. Open the frontend at `http://localhost:5173` to match the default `CLIENT_URL` used for cookie requests.
 
 ## Scripts
 
@@ -133,11 +134,11 @@ One root lockfile tracks all workspaces. For repeatable installs after cloning, 
 ## Current pages and API
 
 - `/` — responsive home page, planned feature cards, real API status.
-- `/login`, `/register` — explanatory placeholders, no account handling.
-- `/dashboard` — public placeholder, no role checks or private data.
+- `/login`, `/register` — sign in or register as a driver or mall owner.
+- `/dashboard` — requires sign-in and shows account status. Admins can approve or reject pending owners and suspend active owners.
 - Other browser paths — friendly not-found page.
 
-Only one API is implemented:
+The liveness endpoint is:
 
 ```http
 GET /api/health
@@ -147,7 +148,17 @@ GET /api/health
 { "success": true, "message": "ParkEase API is running" }
 ```
 
-Unknown API routes return JSON with HTTP 404. Malformed JSON returns HTTP 400; unexpected errors return a generic HTTP 500 response without internal details. CORS uses `CLIENT_URL` (default `http://localhost:5173`). CORS controls browser access; authentication will be implemented later.
+Unknown API routes return JSON with HTTP 404. Malformed JSON returns HTTP 400; unexpected errors return a generic HTTP 500 response without internal details. CORS uses `CLIENT_URL` (default `http://localhost:5173`). The authentication APIs are `POST /api/auth/register`, `/login`, `/refresh`, and `/logout`, and `GET /api/auth/me`. Use the bearer access token with `/me`. Send the refresh cookie with requests to `/refresh` and `/logout`, along with the configured `Origin` and `X-Requested-With: XMLHttpRequest`. Logout revokes the refresh family. Existing access tokens expire on their normal schedule.
+
+To create the initial Admin, set `ADMIN_EMAIL` and a strong `ADMIN_PASSWORD` in `server/.env`. Set `ADMIN_NAME` optionally, then run:
+
+```bash
+npm run seed:admin --workspace server
+```
+
+Log in with that account and use its bearer token with `GET /api/admin/mall-owners?status=PENDING_APPROVAL` and `PATCH /api/admin/mall-owners/:userId/status`. Send `{ "status": "ACTIVE" }` to approve a pending owner, `{ "status": "REJECTED", "rejectionReason": "..." }` to reject a pending owner, or `{ "status": "SUSPENDED" }` to suspend an active owner.
+
+The database integration test runs when `AUTH_TEST_MONGODB_URI` is set before `npm test`. Use an isolated replica set with permission to create and drop the randomly named test database.
 
 ## Dependencies
 
@@ -168,7 +179,7 @@ Create a feature branch from the latest `main`, keep changes focused, run lint/b
 
 ## Intentionally deferred
 
-Authentication, password hashing, JWTs, RBAC, user/mall/slot/booking schemas, mall approval, slot CRUD, atomic allocation, reservations, QR generation/scanning, entry/exit, expiry jobs, billing, owner/admin dashboards, analytics, waitlist, payments, notifications, maps, pricing, and prediction are not implemented. `ROLES` establishes naming only: `USER`, `MALL_OWNER`, `GUARD`, `ADMIN`.
+mall/slot/booking schemas, mall approval, slot CRUD, atomic allocation, reservations, QR generation/scanning, entry/exit, expiry jobs, billing, owner/admin dashboards, analytics, waitlist, payments, notifications, maps, pricing, and prediction are not implemented. `ROLES` establishes naming only: `USER`, `MALL_OWNER`, `GUARD`, `ADMIN`.
 
 ## Recommended next stage (proposal only)
 

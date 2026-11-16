@@ -639,7 +639,7 @@ API conventions:
 - Exit is allowed only for ACTIVE; duration uses server-recorded entry/exit timestamps; completion releases the slot.
 - Use 409 for duplicate active-booking attempts, unavailable-slot races, and invalid state conflicts.
 
-MongoDB transaction availability depends on deployment topology. Verify that local and target MongoDB environments support transactions before relying on them. Use atomic single-document updates as a foundation and document rollback/compensation behavior for multi-document operations.
+Use a MongoDB replica set or sharded cluster for multi-document transactions. Verify transaction support locally and in the target environment. Keep related writes in one transaction and use conditional updates for state transitions.
 
 ---
 

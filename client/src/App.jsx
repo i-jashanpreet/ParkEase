@@ -1,3 +1,4 @@
+import AuthGate from "./components/AuthGate.jsx";
 import { Route, Routes } from "react-router-dom";
 import Navbar from "./components/Navbar.jsx";
 import Footer from "./components/Footer.jsx";
@@ -17,9 +18,9 @@ export default function App() {
       <main id="main-content">
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RegisterPage />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/login" element={<AuthGate guest><LoginPage /></AuthGate>} />
+          <Route path="/register" element={<AuthGate guest><RegisterPage /></AuthGate>} />
+          <Route path="/dashboard" element={<AuthGate><DashboardPage /></AuthGate>} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </main>
