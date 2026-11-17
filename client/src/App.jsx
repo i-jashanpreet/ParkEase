@@ -1,4 +1,5 @@
-import { Routes, Route } from "react-router-dom";
+import { createElement } from "react";
+import { Routes, Route, useParams } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext.jsx";
 import ProtectedRoute from "./components/ProtectedRoute.jsx";
 import useAuth from "./hooks/useAuth.js";
@@ -20,6 +21,11 @@ function RoleDashboard() {
   return user.role === ROLES.USER ? <DashboardPage /> : <AccountDashboard key={user._id} />;
 }
 
+function MallPage({ Component }) {
+  const { id } = useParams();
+  return createElement(Component, { key: id });
+}
+
 /**
  * Main application router defining public and dashboard layout hierarchies,
  * wrapped in the central AuthProvider with protected dashboard access.
@@ -31,13 +37,16 @@ export default function App() {
         {/* Public layout route tree */}
         <Route element={<PublicLayout />}>
           <Route path="/" element={<HomePage />} />
-          <Route path="/malls" element={<MallDiscoveryPage />} />
-          <Route path="/malls/:id" element={<MallDetailsPage />} />
-          <Route path="/malls/:id/parking" element={<ParkingAvailabilityPage />} />
-          <Route path="/malls/:id/availability" element={<ParkingAvailabilityPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="*" element={<NotFoundPage />} />
+        </Route>
+
+        <Route element={<DashboardLayout />}>
+          <Route path="/malls" element={<MallDiscoveryPage />} />
+          <Route path="/malls/:id" element={<MallPage Component={MallDetailsPage} />} />
+          <Route path="/malls/:id/parking" element={<MallPage Component={ParkingAvailabilityPage} />} />
+          <Route path="/malls/:id/availability" element={<MallPage Component={ParkingAvailabilityPage} />} />
         </Route>
 
         {/* Protected dashboard layout */}

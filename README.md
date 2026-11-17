@@ -135,8 +135,8 @@ One root lockfile tracks all workspaces. For repeatable installs after cloning, 
 
 - `/` — responsive home page, planned feature cards, real API status.
 - `/login`, `/register` — sign in or register as a driver or mall owner.
-- `/dashboard` — requires sign-in and displays the team’s driver dashboard or the signed-in role’s account view. Admins can approve or reject pending owners and suspend active owners.
-- `/malls`, mall details, and parking availability — discovery screens with empty states until the corresponding backend APIs are available.
+- `/dashboard` — requires sign-in and displays the team’s driver dashboard or the signed-in role’s account view. Admins can approve or reject pending owners and suspend active owners. Approved owners can submit mall profiles and see their status under **My malls**. Admins review pending mall profiles under **Mall submissions**.
+- `/malls`, mall details, and parking availability — discovery and profile screens show approved mall profiles. The parking availability screen awaits the inventory API.
 - Other browser paths — friendly not-found page.
 
 The liveness endpoint is:
@@ -180,7 +180,7 @@ Create a feature branch from the latest `main`, keep changes focused, run lint/b
 
 ## Intentionally deferred
 
-mall/slot/booking schemas, mall approval, slot CRUD, atomic allocation, reservations, QR generation/scanning, entry/exit, expiry jobs, billing, owner/admin dashboards, analytics, waitlist, payments, notifications, maps, pricing, and prediction are not implemented. `ROLES` establishes naming only: `USER`, `MALL_OWNER`, `GUARD`, `ADMIN`.
+parking slot and booking schemas, mall approval, slot CRUD, atomic allocation, reservations, QR generation/scanning, entry/exit, expiry jobs, billing, owner/admin dashboards, analytics, waitlist, payments, notifications, maps, pricing, and prediction are not implemented. `ROLES` establishes naming only: `USER`, `MALL_OWNER`, `GUARD`, `ADMIN`.
 
 ## Recommended next stage (proposal only)
 

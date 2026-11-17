@@ -1,3 +1,4 @@
+import AuthStory from "../components/AuthStory.jsx";
 import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Input from "../components/Input.jsx";
@@ -84,7 +85,7 @@ export default function RegisterPage() {
         setStatusMessage({
           type: "warning",
           title: "Server Unavailable",
-          body: "Unable to connect to the registration server. Please check your network connection or verify that the backend server is running.",
+          body: "Unable to connect to the registration server. Please check your connection and try again.",
         });
       } else {
         setErrors((prev) => ({
@@ -99,6 +100,7 @@ export default function RegisterPage() {
 
   return (
     <div className="auth-page-wrapper">
+      <AuthStory />
       <div className="auth-card-container">
         <div className="auth-card">
           {/* Header & Branding */}
@@ -111,7 +113,7 @@ export default function RegisterPage() {
             </Link>
             <h1 className="auth-title">Create an account</h1>
             <p className="auth-subtitle">
-              Join ParkEase to discover parking, reserve slots, and move through malls with ease.
+              Find parking as a driver, or register your mall as an owner.
             </p>
           </div>
 
@@ -183,7 +185,7 @@ export default function RegisterPage() {
               name="phone"
               type="tel"
               placeholder="e.g. 9876543210"
-              helperText="Used for parking ticket verification and SMS notifications."
+              helperText="Your contact number for your ParkEase account."
               value={formData.phone}
               onChange={handleChange}
               error={errors.phone}

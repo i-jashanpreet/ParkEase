@@ -1,3 +1,4 @@
+import Icon from "../components/Icon.jsx";
 import { useState, useEffect, useCallback } from "react";
 import Button from "../components/Button.jsx";
 import StatCard from "../components/StatCard.jsx";
@@ -133,7 +134,7 @@ export default function DashboardPage({
       <PageHeader
         eyebrow="USER PORTAL"
         title={`Welcome back, ${displayName}!`}
-        description="Monitor active parking bay reservations, download digital QR gate entry passes, and find live parking across partner malls."
+        description="Your starting point for a smoother arrival. Explore malls and keep your parking visits in one place."
         badge={
           <Badge variant="success" dot>
             Driver Account Active
@@ -146,7 +147,7 @@ export default function DashboardPage({
               variant="accent"
               size="sm"
             >
-              🅿 Find Parking
+              Find Parking
             </Button>
             <Button
               variant="outline"
@@ -164,10 +165,9 @@ export default function DashboardPage({
       <div className="welcome-user-meta" aria-label="Account details">
         <span className="user-meta-pill">
           <span aria-hidden="true">✉</span>
-          <span>{user?.email || "driver@parkease.com"}</span>
+          <span>{user?.email}</span>
         </span>
         <span className="user-meta-pill">
-          <span aria-hidden="true">👤</span>
           <span>Role: <strong>{user?.role || "USER"}</strong></span>
         </span>
         <span className="user-meta-pill">
@@ -191,8 +191,8 @@ export default function DashboardPage({
         <StatCard
           label="Total Bookings"
           value={isLoading ? "--" : stats.total}
-          note={isPendingBackend ? "Reservation stats connect in Sprint 4" : "All-time parking reservations"}
-          badge={isPendingBackend ? "Sprint 4" : `${stats.total} total`}
+          note={isPendingBackend ? "Reservations are coming soon" : "All-time parking reservations"}
+          badge={isPendingBackend ? "Coming soon" : `${stats.total} total`}
           badgeVariant={isPendingBackend ? "neutral" : "primary"}
           loading={isLoading}
         />
@@ -200,7 +200,7 @@ export default function DashboardPage({
         <StatCard
           label="Active Bookings"
           value={isLoading ? "--" : stats.active}
-          note={isPendingBackend ? "Live gate passes connect in Sprint 4" : "Currently reserved or checked-in bays"}
+          note={isPendingBackend ? "Gate passes are coming soon" : "Currently reserved or checked-in bays"}
           badge={stats.active > 0 ? "Active Now" : "None Active"}
           badgeVariant={stats.active > 0 ? "success" : "neutral"}
           loading={isLoading}
@@ -209,7 +209,7 @@ export default function DashboardPage({
         <StatCard
           label="Completed Bookings"
           value={isLoading ? "--" : stats.completed}
-          note={isPendingBackend ? "Visit logs connect in Sprint 4" : "Successfully completed parking visits"}
+          note={isPendingBackend ? "Your visits will appear here" : "Successfully completed parking visits"}
           badge={stats.completed > 0 ? "Completed" : "None"}
           badgeVariant="neutral"
           loading={isLoading}
@@ -220,13 +220,11 @@ export default function DashboardPage({
       <section className="quick-actions-grid" aria-label="Quick actions">
         <Card className="quick-action-card">
           <div className="quick-action-header">
-            <div className="quick-action-icon" aria-hidden="true">
-              🅿
-            </div>
+            <div className="quick-action-icon" aria-hidden="true"><Icon name="pin" /></div>
             <div>
               <h3 className="quick-action-title">Find Parking</h3>
               <p className="quick-action-desc">
-                Search partner shopping malls, check real-time bay availability across basement floors, and reserve ahead of arrival.
+                Explore approved malls, parking rates, and opening hours.
               </p>
             </div>
           </div>
@@ -237,13 +235,11 @@ export default function DashboardPage({
 
         <Card className="quick-action-card">
           <div className="quick-action-header">
-            <div className="quick-action-icon" aria-hidden="true">
-              📋
-            </div>
+            <div className="quick-action-icon" aria-hidden="true"><Icon name="clipboard" /></div>
             <div>
               <h3 className="quick-action-title">My Bookings</h3>
               <p className="quick-action-desc">
-                Access your digital QR entry passes, inspect assigned parking bays, check arrival directions, and view past history.
+                View your parking visits when reservations become available.
               </p>
             </div>
           </div>
@@ -281,9 +277,9 @@ export default function DashboardPage({
           {!isLoading && !error && bookings.length === 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
               <EmptyState
-                icon="🅿"
+                icon={<Icon name="car" size={28} />}
                 title="No Parking Reservations Found"
-                description="You haven't reserved any parking bays yet. Explore available shopping mall parking to reserve your first slot."
+                description="Your parking visits will appear here when reservations become available. Explore malls to plan your next visit."
                 action={
                   <Button to="/malls" variant="accent" size="sm">
                     Find Parking Now
@@ -294,10 +290,9 @@ export default function DashboardPage({
               {isPendingBackend && (
                 <div className="auth-status-banner info" role="status">
                   <div>
-                    <strong>Sprint 4 Note: </strong>
+                    <strong>Reservations are coming next. </strong>
                     <span>
-                      Live atomic booking APIs are currently scheduled for Sprint 4 (Shikhar &amp; Mehak).
-                      No live backend bookings are recorded yet.
+                      You can explore malls now. Online reservations and digital gate passes will be available in a future update.
                     </span>
                   </div>
                 </div>
@@ -418,7 +413,7 @@ export default function DashboardPage({
             </div>
 
             <p style={{ marginTop: "16px", fontSize: "12px", color: "var(--color-text-muted)" }}>
-              QR entry/exit scanners operate autonomously with security guard tablets during Sprint 4.
+              QR entry and exit will be available in a future update.
             </p>
           </div>
         )}

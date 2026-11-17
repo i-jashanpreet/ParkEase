@@ -1,3 +1,4 @@
+import AuthStory from "../components/AuthStory.jsx";
 import { useState, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import Input from "../components/Input.jsx";
@@ -83,7 +84,7 @@ export default function LoginPage() {
         setStatusMessage({
           type: "warning",
           title: "Server Unavailable",
-          body: "Unable to connect to the authentication server. Please check your network connection or verify that the backend server is running.",
+          body: "Unable to connect to the authentication server. Please check your connection and try again.",
         });
       } else {
         setErrors((prev) => ({
@@ -98,6 +99,7 @@ export default function LoginPage() {
 
   return (
     <div className="auth-page-wrapper">
+      <AuthStory />
       <div className="auth-card-container">
         <div className="auth-card">
           {/* Header & Branding */}
@@ -265,7 +267,7 @@ export default function LoginPage() {
         isOpen={forgotModalOpen}
         onClose={() => setForgotModalOpen(false)}
         title="Forgot Password"
-        description="Password reset workflows are planned for the backend identity module."
+        description="Password recovery is not available yet."
         actions={
           <Button variant="secondary" onClick={() => setForgotModalOpen(false)}>
             Close
@@ -273,12 +275,10 @@ export default function LoginPage() {
         }
       >
         <p style={{ fontSize: "14px", color: "var(--color-text-secondary)", lineHeight: "1.6" }}>
-          In the upcoming identity and authentication milestone, registered users will be
-          able to initiate secure email password recovery. During this layout milestone,
-          no credential reset flow is live.
+          Password recovery is coming in a future update. If you still know your password, close this message to sign in.
         </p>
         <div style={{ marginTop: "16px" }}>
-          <Badge variant="neutral">Sprint 2 Planned</Badge>
+          <Badge variant="neutral">Coming soon</Badge>
         </div>
       </Modal>
     </div>

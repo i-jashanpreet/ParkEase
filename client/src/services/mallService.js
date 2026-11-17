@@ -1,21 +1,6 @@
 import apiClient from "./api.js";
 
-/**
- * Mall Management & Discovery Service (Sprint 3 Milestone)
- *
- * BACKEND STATUS: PENDING IMPLEMENTATION
- * Live backend endpoints are currently pending implementation by Shikhar (Sprint 3):
- * - GET /api/malls (Mall listing, with query params: search, city, etc.)
- * - GET /api/malls/:id (Mall details)
- * - POST /api/malls (Mall submission by Mall Owners)
- *
- * Safe absence handling:
- * Unconfirmed endpoints are handled safely. If backend mall endpoints return 404 or
- * are pending, the service returns safe defaults ({ malls: [], total: 0 }) or surfaces
- * status for friendly UI empty/unavailable states without fake data.
- */
-
-export const MALL_SERVICE_STATUS = "PENDING_BACKEND_IMPLEMENTATION";
+export const MALL_SERVICE_STATUS = "AVAILABLE";
 
 export const PENDING_MALL_ROUTES = Object.freeze({
   LIST_MALLS: "/malls",
@@ -23,7 +8,7 @@ export const PENDING_MALL_ROUTES = Object.freeze({
   CREATE_MALL: "/malls",
 });
 
-let mallApiConfirmed = false;
+let mallApiConfirmed = true;
 
 export function isMallApiAvailable() {
   return mallApiConfirmed;
@@ -63,6 +48,8 @@ export function normalizeMall(item) {
     id,
     name,
     address,
+    description: item.description || "",
+    hourlyRatePaise: item.hourlyRatePaise ?? null,
     city,
     state,
     pincode,
@@ -101,13 +88,8 @@ export function normalizeMallsResponse(response) {
     };
   }
 
-  const rawList = Array.isArray(response)
-    ? response
-    : Array.isArray(response.data)
-      ? response.data
-      : Array.isArray(response.malls)
-        ? response.malls
-        : [];
+  const rawList = [response, response.data?.malls, response.data, response.malls]
+    .find(Array.isArray) ?? [];
 
   const malls = rawList.map(normalizeMall).filter(Boolean);
 
@@ -116,7 +98,7 @@ export function normalizeMallsResponse(response) {
 
   return {
     malls,
-    total: typeof response.total === "number" ? response.total : malls.length,
+    total: response.data?.total ?? response.total ?? malls.length,
     supportedCities,
   };
 }
@@ -172,14 +154,14 @@ export async function getMallById(id, options = {}) {
   try {
     const endpoint = PENDING_MALL_ROUTES.GET_MALL.replace(":id", encodeURIComponent(id));
     const response = await apiClient.get(endpoint, options);
-    const rawMall = response && response.data ? response.data : response;
+    const rawMall = response?.data?.mall ?? response?.data ?? response;
     const mall = normalizeMall(rawMall);
     return { mall, isPendingBackend: false };
   } catch (err) {
     if (err.status === 404) {
       return {
         mall: null,
-        isPendingBackend: true,
+        isPendingBackend: false,
       };
     }
     throw err;

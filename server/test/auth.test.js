@@ -7,9 +7,10 @@ import { once } from "node:events";
 import test from "node:test";
 import mongoose from "mongoose";
 import app from "../src/app.js";
+import Mall from "../src/models/Mall.js";
 import User from "../src/models/User.js";
 import RefreshToken from "../src/models/RefreshToken.js";
-import { hashToken } from "../src/utils/jwt.js";
+import { hashToken, signAccessToken } from "../src/utils/jwt.js";
 
 const origin = process.env.CLIENT_URL || "http://localhost:5173";
 const csrf = { Origin: origin, "X-Requested-With": "XMLHttpRequest" };
@@ -49,7 +50,7 @@ test("auth lifecycle on MongoDB", { skip: !process.env.AUTH_TEST_MONGODB_URI && 
       await mongoose.disconnect();
     }
   });
-  await Promise.all([User.init(), RefreshToken.init()]);
+  await Promise.all([User.init(), RefreshToken.init(), Mall.init()]);
   const request = await serve(t);
   const register = (body) => request("register", { body });
   const login = (body = account) => request("login", { body, headers: { "User-Agent": "integration-test" } });
@@ -168,14 +169,95 @@ test("auth lifecycle on MongoDB", { skip: !process.env.AUTH_TEST_MONGODB_URI && 
     assert.equal((await update(data.user._id, "ACTIVE")).status, 404);
     assert.equal((await update(ownerData.user._id, "SUSPENDED")).status, 409);
 
+    const mallDetails = { name: "City Centre", city: "Delhi", address: "25 Main Road", hourlyRatePaise: 5050 };
+    const mallRequest = (path, token, body) => request(path, {
+      area: "malls",
+      method: body ? "POST" : "GET",
+      headers: { Authorization: `Bearer ${token}` },
+      body,
+    });
+    assert.equal((await mallRequest("", ownerData.accessToken, mallDetails)).status, 403);
+    assert.equal((await mallRequest("", data.accessToken, mallDetails)).status, 403);
+    assert.equal((await mallRequest("owner/my-malls", ownerData.accessToken)).status, 403);
+
     const approval = await update(ownerData.user._id, "ACTIVE", { approvedBy: data.user._id });
     assert.equal(approval.status, 200);
     const { user: approved } = (await approval.json()).data;
     assert.equal(approved.approvedBy, adminData.user._id);
     assert.ok(approved.approvedAt);
     assert.equal((await (await me(ownerData.accessToken)).json()).data.user.status, "ACTIVE");
+    await adminTest.test("Mall submission, review, and public visibility enforce permissions", async () => {
+      const created = await mallRequest("", ownerData.accessToken, {
+        ...mallDetails,
+        ownerId: adminData.user._id,
+        status: "APPROVED",
+      });
+      assert.equal(created.status, 201);
+      const { data: { mall } } = await created.json();
+      assert.equal(mall.status, "PENDING");
+      assert.equal(mall.ownerId, ownerData.user._id);
+      assert.equal(mall.hourlyRatePaise, 5050);
+      assert.equal(mall.openingTime, "08:00");
+      assert.equal((await mallRequest("", ownerData.accessToken, mallDetails)).status, 409);
+      assert.equal((await mallRequest("", ownerData.accessToken, { ...mallDetails, hourlyRatePaise: 1.5 })).status, 400);
+      assert.equal((await mallRequest("", ownerData.accessToken, { ...mallDetails, hourlyRatePaise: -1 })).status, 400);
+      assert.equal((await mallRequest("", ownerData.accessToken, { ...mallDetails, openingTime: "24:00" })).status, 400);
+
+      const otherOwner = await User.create({
+        name: "Another Owner", email: "other-owner@example.test",
+        role: "MALL_OWNER", status: "ACTIVE", passwordHash: "unused-test-fixture",
+      });
+      const otherToken = signAccessToken(otherOwner);
+      const own = await mallRequest("owner/my-malls?ownerId=" + otherOwner.id, ownerData.accessToken);
+      const other = await mallRequest("owner/my-malls?ownerId=" + mall.ownerId, otherToken);
+      assert.deepEqual((await own.json()).data.malls.map((item) => item._id), [mall._id]);
+      assert.deepEqual((await other.json()).data.malls, []);
+
+      const publicRead = (path = "") => request(path, { area: "malls", method: "GET" });
+      const review = (mallId, body, token = adminData.accessToken) => adminRequest(`malls/${mallId}/status`, token, body);
+      assert.deepEqual((await (await publicRead()).json()).data.malls, []);
+      assert.equal((await publicRead(mall._id)).status, 404);
+      assert.equal((await review(mall._id, { status: "APPROVED" }, ownerData.accessToken)).status, 403);
+      const queue = await adminRequest("malls?status=PENDING", adminData.accessToken);
+      assert.deepEqual((await queue.json()).data.malls.map((item) => item._id), [mall._id]);
+
+      const reviewed = await review(mall._id, { status: "APPROVED" });
+      assert.equal(reviewed.status, 200);
+      const approvedMall = (await reviewed.json()).data.mall;
+      assert.equal(approvedMall.approvedBy, adminData.user._id);
+      assert.ok(approvedMall.approvedAt);
+      assert.equal((await review(mall._id, { status: "APPROVED" })).status, 409);
+
+      const listed = await publicRead("?city=delhi&search=city");
+      const { malls: publicMalls, total } = (await listed.json()).data;
+      assert.equal(total, 1);
+      assert.equal(publicMalls[0]._id, mall._id);
+      assert.equal(publicMalls[0].ownerId, undefined);
+      assert.equal(publicMalls[0].approvedBy, undefined);
+      const mallService = await import("../../client/src/services/mallService.js");
+      const normalized = mallService.normalizeMallsResponse({ data: { malls: publicMalls, total } });
+      assert.equal(normalized.malls[0].hourlyRatePaise, 5050);
+      assert.equal(normalized.malls[0].id, mall._id);
+      assert.deepEqual((await (await publicRead("?search=.*")).json()).data.malls, []);
+      assert.deepEqual((await (await publicRead("?city=Del")).json()).data.malls, []);
+      assert.equal((await publicRead("?city=Delhi&city=Noida")).status, 400);
+      assert.equal((await (await publicRead(mall._id)).json()).data.mall.status, "APPROVED");
+
+      const rejectedMall = await mallRequest("", ownerData.accessToken, { ...mallDetails, name: "Other Mall" });
+      const rejectedId = (await rejectedMall.json()).data.mall._id;
+      assert.equal((await review(rejectedId, { status: "REJECTED" })).status, 400);
+      const rejection = await review(rejectedId, { status: "REJECTED", rejectionReason: "  Verify address  " });
+      assert.equal((await rejection.json()).data.mall.rejectionReason, "Verify address");
+      assert.equal((await publicRead(rejectedId)).status, 404);
+
+      assert.equal((await review(mall._id, { status: "INACTIVE" })).status, 200);
+      assert.equal((await publicRead(mall._id)).status, 404);
+      assert.deepEqual((await (await publicRead()).json()).data.malls, []);
+    });
+
     assert.equal((await update(ownerData.user._id, "SUSPENDED")).status, 200);
     assert.equal((await me(ownerData.accessToken)).status, 403);
+    assert.equal((await mallRequest("owner/my-malls", ownerData.accessToken)).status, 403);
     assert.equal((await refresh(readCookie(owner))).status, 403);
 
     const secondOwner = await register({ ...account, email: "second-owner@example.test", role: "MALL_OWNER" });

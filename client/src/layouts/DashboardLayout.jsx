@@ -1,208 +1,97 @@
-import { useState } from "react";
-import { Link, NavLink, Outlet } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, Outlet, useLocation } from "react-router-dom";
 import useAuth from "../hooks/useAuth.js";
+import Icon from "../components/Icon.jsx";
 
-/**
- * DashboardLayout: Application layout for dashboard and management views.
- * Features a responsive dark navy sidebar, top control header with status,
- * user session pill, logout action, and a main content viewport.
- */
+const roleLabels = { ADMIN: "Admin portal", MALL_OWNER: "Owner portal", GUARD: "Guard portal", USER: "Driver portal" };
+
 export default function DashboardLayout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, logout, logoutError, isSigningOut } = useAuth();
+  const location = useLocation();
+  const sidebar = useRef(null);
+  const menuButton = useRef(null);
+  const view = new URLSearchParams(location.search).get("view") || "overview";
+  const onDashboard = location.pathname === "/dashboard";
+  const roleLabel = roleLabels[user?.role] || "Explore ParkEase";
+  const initials = user?.name?.split(" ").filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "P";
+  const closeSidebar = () => setSidebarOpen(false);
+  const links = [{ label: "Overview", icon: "home", to: "/dashboard", active: onDashboard && view === "overview" }];
+  if (user?.role === "ADMIN") {
+    links.push(
+      { label: "Mall approvals", icon: "clipboard", to: "/dashboard?view=malls", active: onDashboard && view === "malls" },
+      { label: "Owner approvals", icon: "users", to: "/dashboard?view=owners", active: onDashboard && view === "owners" },
+      { label: "All malls", icon: "building", to: "/dashboard?view=all-malls", active: onDashboard && view === "all-malls" },
+    );
+  } else if (user?.role === "MALL_OWNER" && user.status === "ACTIVE") {
+    links.push(
+      { label: "My malls", icon: "building", to: "/dashboard?view=my-malls", active: onDashboard && view === "my-malls" },
+      { label: "Submit a mall", icon: "plus", to: "/dashboard?view=submit", active: onDashboard && view === "submit" },
+    );
+  }
+  links.push({ label: user?.role === "ADMIN" ? "Public directory" : "Find parking", icon: "pin", to: "/malls", active: location.pathname.startsWith("/malls") });
+  const currentLabel = links.find((link) => link.active)?.label || "Overview";
 
-  const toggleSidebar = () => {
-    setSidebarOpen((prev) => !prev);
-  };
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const trigger = menuButton.current;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const nodes = () => [...sidebar.current.querySelectorAll('a[href], button:not([disabled])')].filter((node) => node.getClientRects().length);
+    nodes()[0]?.focus();
+    const handleKey = (event) => {
+      if (event.key === "Escape") setSidebarOpen(false);
+      if (event.key === "Tab") {
+        const list = nodes();
+        const first = list[0];
+        const last = list[list.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    };
+    const handleResize = () => { if (window.innerWidth > 768) setSidebarOpen(false); };
+    document.addEventListener("keydown", handleKey);
+    window.addEventListener("resize", handleResize);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKey);
+      window.removeEventListener("resize", handleResize);
+      trigger?.focus();
+    };
+  }, [sidebarOpen]);
 
-  const closeSidebar = () => {
-    setSidebarOpen(false);
-  };
-
-  const userInitials = user?.name
-    ? user.name
-        .split(" ")
-        .map((part) => part[0])
-        .filter(Boolean)
-        .slice(0, 2)
-        .join("")
-        .toUpperCase()
-    : "PE";
-
-  return (
-    <div className="dashboard-layout">
-      <a className="skip-link" href="#dashboard-main">
-        Skip to dashboard content
-      </a>
-
-      {/* Backdrop overlay for mobile drawer */}
-      {sidebarOpen && (
-        <div
-          className="dashboard-backdrop"
-          onClick={closeSidebar}
-          aria-hidden="true"
-        />
-      )}
-
-      {/* Sidebar navigation */}
-      <aside
-        className={`dashboard-sidebar ${sidebarOpen ? "sidebar-open" : ""}`}
-        aria-label="Dashboard navigation"
-      >
-        <div className="sidebar-header">
-          <Link to="/" className="brand sidebar-brand" onClick={closeSidebar}>
-            <span className="brand-mark" aria-hidden="true">
-              P
-            </span>
-            ParkEase<span className="brand-dot">.</span>
-          </Link>
-          <span className="sidebar-version">Intelligence v0.1</span>
-        </div>
-
-        <nav className="sidebar-nav">
-          <div className="sidebar-group-title">Navigation</div>
-          <NavLink
-            to="/dashboard"
-            end
-            onClick={closeSidebar}
-            className={({ isActive }) =>
-              `sidebar-link ${isActive ? "sidebar-link-active" : ""}`
-            }
-          >
-            <span className="sidebar-icon" aria-hidden="true">
-              ▦
-            </span>
-            <span>Overview</span>
-          </NavLink>
-          <NavLink
-            to="/malls"
-            onClick={closeSidebar}
-            className={({ isActive }) =>
-              `sidebar-link ${isActive ? "sidebar-link-active" : ""}`
-            }
-          >
-            <span className="sidebar-icon" aria-hidden="true">
-              🏢
-            </span>
-            <span>Malls Directory</span>
-          </NavLink>
-
-          <div className="sidebar-group-title">Future Modules</div>
-          <a
-            href="#slots"
-            className="sidebar-link disabled-link"
-            onClick={(e) => e.preventDefault()}
-          >
-            <span className="sidebar-icon" aria-hidden="true">
-              🅿
-            </span>
-            <span>Parking Slots</span>
-            <span className="sidebar-badge">Planned</span>
-          </a>
-
-          <a
-            href="#availability"
-            className="sidebar-link disabled-link"
-            onClick={(e) => e.preventDefault()}
-          >
-            <span className="sidebar-icon" aria-hidden="true">
-              ◉
-            </span>
-            <span>Live Availability</span>
-            <span className="sidebar-badge">Planned</span>
-          </a>
-
-          <a
-            href="#bookings"
-            className="sidebar-link disabled-link"
-            onClick={(e) => e.preventDefault()}
-          >
-            <span className="sidebar-icon" aria-hidden="true">
-              📋
-            </span>
-            <span>Reservations</span>
-            <span className="sidebar-badge">Planned</span>
-          </a>
-
-          <a
-            href="#analytics"
-            className="sidebar-link disabled-link"
-            onClick={(e) => e.preventDefault()}
-          >
-            <span className="sidebar-icon" aria-hidden="true">
-              📈
-            </span>
-            <span>Analytics</span>
-            <span className="sidebar-badge">Planned</span>
-          </a>
-        </nav>
-
-        <div className="sidebar-footer">
-          <div className="sidebar-pill">
-            <span className="status-dot online" aria-hidden="true" />
-            <span>Foundation Preview</span>
-          </div>
-          <Link to="/" className="sidebar-back-link" onClick={closeSidebar}>
-            ← Public Website
-          </Link>
-        </div>
-      </aside>
-
-      {/* Main dashboard body */}
-      <div className="dashboard-body">
-        {/* Top header */}
-        <header className="dashboard-header" aria-label="Dashboard header">
-          <div className="dashboard-header-left">
-            <button
-              type="button"
-              className="dashboard-menu-toggle"
-              onClick={toggleSidebar}
-              aria-label="Toggle navigation sidebar"
-              aria-expanded={sidebarOpen}
-            >
-              <span className="hamburger-line" />
-              <span className="hamburger-line" />
-              <span className="hamburger-line" />
-            </button>
-            <div className="dashboard-title-group">
-              <span className="dashboard-crumb">ParkEase Console</span>
-              <h1 className="dashboard-heading">Dashboard</h1>
-            </div>
-          </div>
-
-          <div className="dashboard-header-actions">
-            <div className="dashboard-status-indicator">
-              <span className="status-dot online" aria-hidden="true" />
-              <span>{user ? "Session Active" : "Foundation Active"}</span>
-            </div>
-            <Link to="/" className="button button-small button-outline">
-              Public Site ↗
-            </Link>
-            <div
-              className="user-avatar-pill"
-              title={user ? `${user.name || "User"} (${user.role || "MEMBER"})` : "ParkEase User"}
-            >
-              <span className="user-avatar-initial">{userInitials}</span>
-              <span className="user-avatar-role">{user?.role || "GUEST"}</span>
-            </div>
-            <button
-              type="button"
-              className="button button-small button-outline"
-              onClick={logout}
-              disabled={isSigningOut}
-              title="Sign out of ParkEase"
-            >
-              {isSigningOut ? "Signing out…" : "Sign Out"}
-            </button>
-          </div>
-        </header>
-
-        {/* Dashboard main viewport */}
-        <main id="dashboard-main" className="dashboard-main">
-          {logoutError && <p className="form-error-text" role="alert">{logoutError}</p>}
-          {children || <Outlet />}
-        </main>
+  return <div className="dashboard-layout">
+    <a className="skip-link" href="#dashboard-main">Skip to dashboard content</a>
+    {sidebarOpen && <div className="dashboard-backdrop" onClick={closeSidebar} aria-hidden="true" />}
+    <aside ref={sidebar} id="app-navigation" className={`dashboard-sidebar ${sidebarOpen ? "sidebar-open" : ""}`} aria-label="Main navigation" role={sidebarOpen ? "dialog" : undefined} aria-modal={sidebarOpen || undefined}>
+      <div className="sidebar-header">
+        <Link to="/" className="brand sidebar-brand" onClick={closeSidebar}><span className="brand-mark">P</span>ParkEase</Link>
+        <button className="sidebar-close icon-button" onClick={closeSidebar} aria-label="Close navigation"><Icon name="close" /></button>
+        <span className="sidebar-version">{roleLabel}</span>
       </div>
+      <nav className="sidebar-nav" aria-label={roleLabel}>
+        {links.map((link) => <Link key={link.to} to={link.to} onClick={closeSidebar} aria-current={link.active ? "page" : undefined} className={`sidebar-link ${link.active ? "sidebar-link-active" : ""}`}><Icon name={link.icon} /><span>{link.label}</span></Link>)}
+      </nav>
+      <div className="sidebar-footer">
+        <Link to="/" className="sidebar-back-link" onClick={closeSidebar}><Icon name="arrow" /> Back to home</Link>
+        <div className="sidebar-profile"><span className="profile-avatar">{initials}</span><div><strong>{user?.name || "Welcome to ParkEase"}</strong><span>{user ? roleLabel : "Find your next destination"}</span></div></div>
+      </div>
+    </aside>
+    <div className="dashboard-body" inert={sidebarOpen}>
+      <header className="dashboard-header">
+        <div className="dashboard-header-left">
+          <button ref={menuButton} type="button" className="dashboard-menu-toggle icon-button" onClick={() => setSidebarOpen(!sidebarOpen)} aria-label="Toggle navigation sidebar" aria-controls="app-navigation" aria-expanded={sidebarOpen}><Icon name="menu" /></button>
+          <div className="app-breadcrumb"><span>{roleLabel.replace(" portal", "")}</span><span aria-hidden="true">/</span><strong>{currentLabel}</strong></div>
+        </div>
+        <div className="dashboard-header-actions">
+          {user ? <><span className="header-account-name">{user.name}</span><span className="profile-avatar">{initials}</span><button type="button" className="icon-button signout-button" disabled={isSigningOut} onClick={logout} aria-label={isSigningOut ? "Signing out" : "Sign out"}><Icon name="exit" /></button></> : <Link className="button button-primary button-sm" to="/login">Sign in <Icon name="arrow" size={16} /></Link>}
+        </div>
+      </header>
+      <main id="dashboard-main" className="dashboard-main">
+        {logoutError && <p className="form-error-text" role="alert">{logoutError}</p>}
+        {children || <Outlet />}
+      </main>
+      <footer className="workspace-footer"><span>ParkEase</span><span>A smoother arrival starts here.</span></footer>
     </div>
-  );
+  </div>;
 }

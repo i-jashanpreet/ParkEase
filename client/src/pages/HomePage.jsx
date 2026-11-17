@@ -1,130 +1,29 @@
-import { useEffect, useState } from "react";
 import Button from "../components/Button.jsx";
 import FeatureCard from "../components/FeatureCard.jsx";
-import { getHealthStatus } from "../services/healthService.js";
+import Icon from "../components/Icon.jsx";
+import ParkingPreview from "../components/ParkingPreview.jsx";
 
 export default function HomePage() {
-  const [apiStatus, setApiStatus] = useState("Checking backend…");
-  useEffect(() => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    getHealthStatus({ signal: controller.signal })
-      .then((data) =>
-        setApiStatus(
-          data.success === true ? "API Connected" : "Backend unavailable",
-        ),
-      )
-      .catch(() => {
-        setApiStatus("Backend unavailable");
-      })
-      .finally(() => clearTimeout(timeout));
-    return () => {
-      controller.abort();
-      clearTimeout(timeout);
-    };
-  }, []);
-
-  return (
-    <>
-      <section className="container hero">
-        <div className="hero-copy">
-          <span className="eyebrow">
-            <span className="small-dot" /> SMART MALL PARKING INTELLIGENCE
-          </span>
-          <h1>
-            Smart Parking.
-            <br />
-            <span>Zero Hassle.</span>
-          </h1>
-          <p className="hero-description">
-            A better mall visit starts before you step inside. ParkEase is being
-            built to help you discover parking, reserve a slot, and move with
-            ease.
-          </p>
-          <div className="hero-actions">
-            <Button to="/register" variant="accent">
-              Get Started <span aria-hidden="true">↗</span>
-            </Button>
-            <Button to="/login" variant="secondary">
-              Login
-            </Button>
-          </div>
-          <p className="tagline">Book smarter. Enter faster. Park better.</p>
-        </div>
-        <div
-          className="parking-visual"
-          aria-label="Illustration of a future smart parking layout"
-        >
-          <div className="visual-heading">
-            <span>
-              <span className="small-dot" /> THE WAY FORWARD
-            </span>
-            <span>01 / PARK</span>
-          </div>
-          <div className="parking-sign">
-            P
-            <span>
-              Less searching.
-              <br />
-              More arriving.
-            </span>
-          </div>
-          <div className="parking-grid" aria-hidden="true">
-            {["", "", "car", "", "car", ""].map((slot, index) => (
-              <div key={index} className={`parking-space ${slot}`}>
-                {slot ? (
-                  <span>▰</span>
-                ) : (
-                  <span>{String(index + 1).padStart(2, "0")}</span>
-                )}
-              </div>
-            ))}
-          </div>
-          <div className="visual-bottom">
-            <span>Designed for a smoother arrival</span>
-            <span aria-hidden="true">↗</span>
-          </div>
-          <span className="illustration-label">
-            Concept illustration · No live parking data
-          </span>
-        </div>
-      </section>
-      <div className="container status-bar">
-        <span
-          className={`status-dot ${apiStatus === "API Connected" ? "online" : ""}`}
-        />
-        <span role="status">{apiStatus}</span>
-        <span className="status-note">
-          Foundation preview · Features below are planned
-        </span>
+  return <>
+    <section className="container hero">
+      <div className="hero-copy">
+        <span className="eyebrow"><span className="small-dot" /> A LITTLE LESS CIRCLING. A LOT MORE LIVING.</span>
+        <h1>Your destination.<br /><span>Your parking.<br />All in one place.</span></h1>
+        <p className="hero-description">Make room for the good part of your day. Discover malls, explore parking details, and plan a smoother arrival with ParkEase.</p>
+        <div className="hero-actions"><Button to="/malls" icon={<Icon name="arrow" size={18} />}>Explore parking</Button><Button to="/register" variant="outline">Create an account</Button></div>
+        <p className="tagline"><Icon name="shield" size={17} /> Reviewed malls. Clear parking information.</p>
       </div>
-      <section className="container features">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">A SMARTER WAY TO PARK</span>
-            <h2>Less friction. More possibility.</h2>
-          </div>
-          <p>
-            The destination is clear.
-            <br />
-            This is where we start.
-          </p>
-        </div>
-        <div className="feature-grid">
-          <FeatureCard number="01" title="Smart Slot Allocation">
-            Find the right space with intelligent parking allocation.
-          </FeatureCard>
-          <FeatureCard number="02" title="QR Entry & Exit">
-            Move through entry and exit with a simple QR workflow.
-          </FeatureCard>
-          <FeatureCard number="03" title="Live Parking Availability">
-            Plan your arrival with a clearer view of available spaces.
-          </FeatureCard>
-          <FeatureCard number="04" title="Secure Parking Workflow">
-            A connected journey from reservation to departure.
-          </FeatureCard>
-        </div>
-      </section>
-    </>
-  );
+      <div className="hero-map"><div className="hero-map-label"><span className="count-chip">P</span><div><strong>A better way to arrive</strong><span>Designed around your next visit</span></div></div><ParkingPreview /><div className="hero-map-foot"><Icon name="pin" /><span>Find your place. Enjoy your day.</span><Icon name="arrow" /></div></div>
+    </section>
+    <section className="container journey-band" aria-label="The ParkEase journey"><div><span>01</span><strong>Discover your destination</strong><p>Browse approved malls and parking rates.</p></div><div><span>02</span><strong>Plan your arrival</strong><p>Check the location and opening hours.</p></div><div><span>03</span><strong>More to come</strong><p>Bay reservations and QR entry are on the way.</p></div></section>
+    <section className="container features">
+      <div className="section-heading"><div><span className="eyebrow">ONE PLATFORM. EVERY PERSPECTIVE.</span><h2>Good parking starts with connection.</h2></div><p>For the people arriving.<br />And the people making it happen.</p></div>
+      <div className="feature-grid">
+        <FeatureCard number="01" title="Find your next stop" badge="For drivers" icon={<Icon name="pin" />}>Explore approved malls, compare parking rates, and check opening hours before you leave.</FeatureCard>
+        <FeatureCard number="02" title="Put your mall on the map" badge="For owners" icon={<Icon name="building" />}>Submit your mall and manage its listing from a dedicated workspace.</FeatureCard>
+        <FeatureCard number="03" title="Keep standards high" badge="For admins" icon={<Icon name="shield" />}>Review mall applications and owner accounts in one connected portal.</FeatureCard>
+        <FeatureCard number="04" title="From bay to barrier" badge="Coming next" icon={<Icon name="car" />}>Parking inventory, reservations, and QR entry will complete the journey.</FeatureCard>
+      </div>
+    </section>
+  </>;
 }
