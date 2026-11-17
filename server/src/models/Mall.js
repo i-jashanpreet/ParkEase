@@ -4,6 +4,9 @@ import { MALL_STATUS } from "../constants/statuses.js";
 const timePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
 const mallSchema = new mongoose.Schema({
+  parkingDraft: { type: mongoose.Schema.Types.Mixed, select: false },
+  parkingPublished: { type: mongoose.Schema.Types.Mixed, select: false },
+  parkingRevision: { type: Number, select: false },
   ownerId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
   name: { type: String, required: true, trim: true, minlength: 2, maxlength: 120 },
   address: { type: String, required: true, trim: true, maxlength: 250 },

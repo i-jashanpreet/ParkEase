@@ -1,23 +1,8 @@
 import apiClient from "./api.js";
 
-/**
- * Parking Slot & Real-time Availability Service (Sprint 3 / Sprint 4 Milestone)
- *
- * BACKEND STATUS: PENDING IMPLEMENTATION
- * Live backend endpoints are currently pending implementation by Shikhar (Sprint 3) & Mehak (Sprint 4):
- * - GET /api/malls/:mallId/slots (Mall parking slot inventory and real-time availability)
- * - GET /api/malls/:mallId/availability (Mall parking summary telemetry)
- * - GET /api/slots (Global slot directory query)
- * - GET /api/slots/:id (Individual slot details)
- * - PATCH /api/slots/:id (Slot status update by guards/sensors)
- *
- * Safe absence handling:
- * Unconfirmed endpoints are handled safely. If backend slot endpoints return 404 or
- * are pending, the service returns safe defaults ({ slots: [], summary: null }) or surfaces
- * status for friendly UI empty/unavailable states without fake data or hardcoded slots.
- */
-
-export const PARKING_SERVICE_STATUS = "PENDING_BACKEND_IMPLEMENTATION";
+// Published mall inventory is available. The global slot directory and
+// individual slot endpoints are reserved for later milestones.
+export const PARKING_SERVICE_STATUS = "MALL_INVENTORY_AVAILABLE";
 
 export const PENDING_PARKING_ROUTES = Object.freeze({
   LIST_SLOTS: "/slots",
@@ -34,7 +19,7 @@ export const SLOT_STATUS = Object.freeze({
   MAINTENANCE: "MAINTENANCE",
 });
 
-let parkingApiConfirmed = false;
+let parkingApiConfirmed = true;
 
 export function isParkingApiAvailable() {
   return parkingApiConfirmed;
@@ -184,7 +169,7 @@ export async function getParkingAvailability(mallId, params = {}, options = {}) 
       ...options,
     });
     const normalized = normalizeParkingResponse(response);
-    return { ...normalized, isPendingBackend: false };
+    return { ...normalized, layout: response?.data?.layout, isPendingBackend: false };
   } catch (err) {
     if (err.status === 404) {
       return {
