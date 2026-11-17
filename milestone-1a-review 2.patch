@@ -1,0 +1,2776 @@
+diff --git a/docs/API_CONTRACTS.md b/docs/API_CONTRACTS.md
+new file mode 100644
+index 0000000..c1f0b59
+--- /dev/null
++++ b/docs/API_CONTRACTS.md
+@@ -0,0 +1,237 @@
++# ParkEase — API Architecture & Contracts (`docs/API_CONTRACTS.md`)
++
++> **Document Status:** Milestone 0 Approved API Inventory & Contract Specification (Revised)  
++> **Base Path:** `/api`  
++> **Content-Type:** `application/json` (Request body limit: `100kb`)
++
++---
++
++## 1. Global Request & Response Conventions
++
++### 1.1 Standard Success Envelope
++All successful API responses (`200 OK`, `201 Created`) follow a uniform JSON envelope that is backward-compatible with the existing `GET /api/health` endpoint (`{ "success": true, "message": "ParkEase API is running" }`):
++
++```json
++{
++  "success": true,
++  "message": "Human-readable summary of the action",
++  "data": { ... },
++  "meta": {
++    "page": 1,
++    "limit": 20,
++    "total": 42
++  }
++}
++```
++- `success`: Always `true` for `2xx` responses.
++- `message`: Always present (`String`).
++- `data`: Optional object or array containing the resource payload.
++- `meta`: Optional pagination or aggregation metadata on list endpoints.
++
++### 1.2 Standard Error Envelope
++All error responses (`4xx`, `5xx`) follow a uniform JSON envelope compatible with `server/src/middleware/errorHandler.js` and `server/src/middleware/notFound.js`:
++
++```json
++{
++  "success": false,
++  "message": "Clear, safe, human-readable error message",
++  "error": {
++    "code": "RESOURCE_CONFLICT",
++    "details": [
++      { "field": "email", "issue": "Email address is already registered" }
++    ]
++  }
++}
++```
++- `success`: Always `false` for `4xx` and `5xx` responses.
++- `message`: Top-level error summary (preserves existing test assertions on `body.message`).
++- `error`: Optional structured metadata (`code` string and optional `details` array for field validation errors). Never contains stack traces, database URIs, or internal secrets.
++
++### 1.3 HTTP Status Code Standards
++| Status Code | Meaning | When Used in ParkEase |
++| :--- | :--- | :--- |
++| `200 OK` | Request succeeded | Standard reads (`GET`), updates (`PATCH`), state transitions (login, refresh, logout, approve, cancel, entry, exit). |
++| `201 Created` | Resource created | Registration, creating a mall, creating slots, provisioning a guard, creating a booking. |
++| `400 Bad Request` | Validation / Malformed input | Malformed JSON body, missing required fields, invalid ObjectId format, invalid enum value, attempting to self-assign `ADMIN`/`GUARD` on public register. |
++| `401 Unauthorized` | Unauthenticated | Missing `Authorization` header, expired/invalid JWT access token, invalid email/password on login, missing/expired/revoked/reused `HttpOnly` refresh token cookie. |
++| `403 Forbidden` | Unauthorized role, scope, or CSRF rejection | Authenticated user lacks required role (`ROLES`), `MALL_OWNER` account is `PENDING_APPROVAL`/`REJECTED`, owner accessing another owner's mall, `GUARD` operating on an unassigned mall, or failed CSRF `Origin` / `X-Requested-With` check on cookie endpoints. |
++| `404 Not Found` | Resource / Route missing | Unknown API path (`notFound.js`), or valid ObjectId whose document does not exist. |
++| `409 Conflict` | Business rule / State conflict | Duplicate email, duplicate slot number in a mall, user already has an active booking, no available slots (`AVAILABLE -> RESERVED` race lost), invalid state transition (e.g., cancelling an `ACTIVE` booking, replaying a QR token). |
++| `413 Payload Too Large` | Body exceeds `100kb` | Handled automatically by `express.json({ limit: "100kb" })` and `errorHandler.js`. |
++| `429 Too Many Requests` | Rate limit exceeded | Too many login/register/refresh attempts from the same IP. |
++| `500 Internal Server Error` | Unexpected server failure | Unhandled runtime error; always returns `{ "success": false, "message": "Something went wrong" }`. |
++
++---
++
++## 2. Authentication, Cookie & CSRF Architecture
++
++### 2.1 Access Token vs. Refresh Token Transport
++1. **Access Token (Short-Lived JWT in React Memory):**
++   - Lifetime: `15m` (`JWT_ACCESS_EXPIRES_IN`).
++   - Returned in the JSON response payload (`data.accessToken`) of `POST /api/auth/register`, `POST /api/auth/login`, and `POST /api/auth/refresh`.
++   - Held **only in React memory** (`AuthContext` / module variable in `client/src/services/api.js`), never written to `localStorage` or `sessionStorage`.
++   - Sent by the client in the HTTP header:
++     ```http
++     Authorization: Bearer <accessToken>
++     ```
++   - Payload claims: `{ sub: userId, role: user.role, status: user.status, iat, exp }`.
++2. **Refresh Token (`HttpOnly` Cookie, Hashed in MongoDB):**
++   - Lifetime: `7d` (`JWT_REFRESH_EXPIRES_IN`).
++   - **Never returned in any JSON response body** and never accessible to `document.cookie` or `localStorage`.
++   - Stored in MongoDB (`RefreshToken` collection) **exclusively as a SHA-256 hex digest** (`tokenHash`).
++   - Set and cleared by the server via the `Set-Cookie` header under the cookie name `parkease_refresh_token`:
++     - **Local Development (`NODE_ENV !== "production"`):**
++       - `HttpOnly: true`
++       - `Secure: false` (allows `http://localhost:5173` <-> `http://localhost:5000` over HTTP)
++       - `SameSite: "lax"` (`localhost` ports are same-site; `Lax` permits top-level navigation and same-site `fetch` with `credentials: "include"`)
++       - `Path: "/api/auth"` (cookie is only sent on requests to `/api/auth/*`)
++       - `Max-Age: 604800` (7 days in seconds)
++     - **Production (`NODE_ENV === "production"`):**
++       - `HttpOnly: true`
++       - `Secure: true` (HTTPS required)
++       - `SameSite: "strict"` (or `"lax"` if deployed across subdomains of the same registrable domain)
++       - `Path: "/api/auth"`
++       - `Max-Age: 604800`
++
++### 2.2 Credentialed CORS & CSRF Protection on `/api/auth/refresh` and `/api/auth/logout`
++- **Credentialed CORS (`server/src/app.js`):**
++  ```js
++  app.use(
++    cors({
++      origin: process.env.CLIENT_URL || "http://localhost:5173",
++      credentials: true,
++      allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
++    })
++  );
++  ```
++- **CSRF Defense-in-Depth (`POST /api/auth/refresh` & `POST /api/auth/logout`):**
++  1. **Cookie Scoping:** `Path=/api/auth` ensures the refresh cookie is never sent to business endpoints (`/api/bookings`, `/api/malls`, `/api/admin`, etc.), which authenticate exclusively via `Authorization: Bearer <accessToken>`.
++  2. **Origin Verification:** Middleware on `/api/auth/refresh` and `/api/auth/logout` verifies that if `req.headers.origin` is present, it matches `process.env.CLIENT_URL || "http://localhost:5173"`; mismatches are rejected with `403 Forbidden`.
++  3. **Custom Header Requirement:** `/api/auth/refresh` and `/api/auth/logout` require `X-Requested-With: XMLHttpRequest` (automatically attached by `client/src/services/api.js`), preventing simple cross-origin HTML `<form>` CSRF attacks.
++
++### 2.3 Authorization Middleware Tiers
++1. `authenticate`: Verifies the `Bearer` JWT access token and attaches `req.user = { id, role, status }`. Returns `401` if missing or invalid.
++2. `requireActiveAccount`: Verifies `req.user.status === "ACTIVE"`. Returns `403` if `SUSPENDED`, `REJECTED`, or `PENDING_APPROVAL` (note: `GET /api/auth/me` and `POST /api/auth/logout` allow `PENDING_APPROVAL` owners so they can view their onboarding status and sign out).
++3. `authorize(...allowedRoles)`: Verifies `allowedRoles.includes(req.user.role)`. Returns `403` if role is not permitted.
++4. `requireMallOwnership` / `requireGuardMallAccess`: Verifies resource-level ownership (`Mall.ownerId === req.user.id`) or active guard assignment (`GuardAssignment.exists({ guardId: req.user.id, mallId, isActive: true })`).
++
++---
++
++## 3. Complete Proposed API Route Inventory
++
++### 3.0 System Health (Implemented)
++| Method | Route | Auth Required | Required Role | Purpose |
++| :--- | :--- | :--- | :--- | :--- |
++| `GET` | `/api/health` | No | Public | Liveness check returning `{ success: true, message: "ParkEase API is running" }`. |
++
++---
++
++### 3.1 Authentication (`/api/auth`)
++| Method | Route | Auth Required | Required Role | Purpose |
++| :--- | :--- | :--- | :--- | :--- |
++| `POST` | `/api/auth/register` | No | Public | Register a new `USER` (`status: "ACTIVE"`) or `MALL_OWNER` (`status: "PENDING_APPROVAL"`). Rejects `GUARD` and `ADMIN` self-registration. Sets `HttpOnly` refresh cookie (`parkease_refresh_token`) and returns `{ user, accessToken }` in JSON. |
++| `POST` | `/api/auth/login` | No | Public | Authenticate with `email` and `password`. Rejects `REJECTED` or `SUSPENDED` accounts (`403`). Sets `HttpOnly` refresh cookie and returns `{ user, accessToken }` in JSON. |
++| `POST` | `/api/auth/refresh` | Yes *(`HttpOnly` cookie + CSRF header)* | Public | Reads `parkease_refresh_token` cookie, verifies SHA-256 hash in `RefreshToken`, performs rotation (revokes old token, sets new `HttpOnly` refresh cookie), and returns `{ accessToken, user }` in JSON. If reuse of a revoked token is detected, revokes the entire `familyId` chain, clears cookie, and returns `401`. |
++| `POST` | `/api/auth/logout` | Yes *(`HttpOnly` cookie + CSRF header)* | Any (`USER`, `MALL_OWNER`, `GUARD`, `ADMIN`) | Revokes the session's `RefreshToken` in MongoDB (if cookie present) and clears the `parkease_refresh_token` `HttpOnly` cookie. Idempotent (`200 OK`). |
++| `GET` | `/api/auth/me` | Yes *(Bearer JWT)* | Any (`USER`, `MALL_OWNER`, `GUARD`, `ADMIN`) | Return current authenticated user's profile, role, and live account `status` (including `PENDING_APPROVAL` for unapproved Mall Owners). |
++
++---
++
++### 3.2 Users (`/api/users`)
++| Method | Route | Auth Required | Required Role | Purpose |
++| :--- | :--- | :--- | :--- | :--- |
++| `GET` | `/api/users/profile` | Yes | Any (`USER`, `MALL_OWNER`, `GUARD`, `ADMIN`) | Retrieve detailed user profile (plus assigned mall info if `GUARD`). |
++| `PATCH` | `/api/users/profile` | Yes | Any (`USER`, `MALL_OWNER`, `GUARD`, `ADMIN`) | Update mutable profile fields (`name`, `phone`). Cannot modify `role`, `status`, or `email`. |
++| `PATCH` | `/api/users/password` | Yes | Any (`USER`, `MALL_OWNER`, `GUARD`, `ADMIN`) | Change password (requires `currentPassword` and `newPassword`; revokes existing refresh tokens). |
++
++---
++
++### 3.3 Mall Management (`/api/malls`)
++| Method | Route | Auth Required | Required Role | Purpose |
++| :--- | :--- | :--- | :--- | :--- |
++| `GET` | `/api/malls` | No | Public | List publicly discoverable malls (`Mall.status === "APPROVED"`), with optional `city` and `search` filters and live available slot counts. |
++| `GET` | `/api/malls/:mallId` | No | Public | View public details and real-time slot availability summary for an `APPROVED` mall. |
++| `POST` | `/api/malls` | Yes | `MALL_OWNER` *(Account `ACTIVE`)* | Submit a new mall profile (`Mall.status` initialized to `"PENDING"`). Blocked with `403` if owner account is still `PENDING_APPROVAL`. |
++| `GET` | `/api/malls/owner/my-malls` | Yes | `MALL_OWNER` | List all malls owned by the authenticated `MALL_OWNER` (includes `PENDING`, `APPROVED`, `REJECTED`, `INACTIVE`). |
++| `GET` | `/api/malls/owner/:mallId` | Yes | `MALL_OWNER` *(Owner of mall)* | Get full management details for an owner's specific mall, including approval metadata. |
++| `PATCH` | `/api/malls/:mallId` | Yes | `MALL_OWNER` *(Owner of mall)* | Update mall details (`name`, `description`, `hourlyRate`, `openingTime`, `closingTime`, or resubmit a `REJECTED` mall). |
++
++---
++
++### 3.4 Parking Slots (`/api/malls/:mallId/slots` & `/api/slots`)
++| Method | Route | Auth Required | Required Role | Purpose |
++| :--- | :--- | :--- | :--- | :--- |
++| `GET` | `/api/malls/:mallId/slots/availability` | No | Public | Get real-time availability breakdown (`AVAILABLE`, `RESERVED`, `OCCUPIED` counts by `vehicleType` and floor) for an `APPROVED` mall. |
++| `GET` | `/api/malls/:mallId/slots` | Yes | `MALL_OWNER` *(Owner)*, `GUARD` *(Assigned)*, `ADMIN` | List all slots in the specified mall with filtering by `floor`, `status`, `vehicleType`, and `isActive`. |
++| `POST` | `/api/malls/:mallId/slots` | Yes | `MALL_OWNER` *(Owner, Account `ACTIVE`)* | Create a single parking slot or batch of slots in the owner's mall. Enforces `{ mallId, slotNumber }` uniqueness (`409` on duplicate). |
++| `PATCH` | `/api/slots/:slotId` | Yes | `MALL_OWNER` *(Owner of parent mall)* | Update slot metadata (`floor`, `zone`, `vehicleType`, or toggle `MAINTENANCE` when slot is `AVAILABLE`). |
++| `PATCH` | `/api/slots/:slotId/deactivate` | Yes | `MALL_OWNER` *(Owner of parent mall)* | Soft-deactivate (`isActive: false`) or reactivate (`isActive: true`) a parking slot. Rejects deactivation with `409` if slot is currently `RESERVED` or `OCCUPIED`. |
++
++---
++
++### 3.5 Guard Management (`/api/guards`)
++| Method | Route | Auth Required | Required Role | Purpose |
++| :--- | :--- | :--- | :--- | :--- |
++| `POST` | `/api/malls/:mallId/guards` | Yes | `MALL_OWNER` *(Owner of mall, Account `ACTIVE`)*, `ADMIN` | Provision a new `GUARD` user account and create an active `GuardAssignment` linking the guard to `:mallId`. |
++| `GET` | `/api/malls/:mallId/guards` | Yes | `MALL_OWNER` *(Owner of mall)*, `ADMIN` | List all guards and their `GuardAssignment` status (`isActive`, `gateLabel`) for `:mallId`. |
++| `PATCH` | `/api/guards/assignments/:assignmentId` | Yes | `MALL_OWNER` *(Owner of mall)*, `ADMIN` | Update `gateLabel` or activate/deactivate (`isActive: true/false`) a guard's assignment to a mall. |
++| `GET` | `/api/guards/my-assignment` | Yes | `GUARD` | Retrieve the authenticated guard's active `GuardAssignment` and assigned `Mall` details. |
++
++---
++
++### 3.6 Bookings (`/api/bookings`)
++| Method | Route | Auth Required | Required Role | Purpose |
++| :--- | :--- | :--- | :--- | :--- |
++| `POST` | `/api/bookings` | Yes | `USER` | Pre-generates `bookingId`, conditionally reserves an `AVAILABLE` slot (`activeBookingId = bookingId`) at an `APPROVED` mall, enforces one active booking per user via partial unique index, creates a `CONFIRMED` booking with `expiresAt`, and issues a `QRToken`. Performs correlation-guarded rollback if creation fails; returns `409` if no slot is available or user already has an active booking. |
++| `GET` | `/api/bookings/my` | Yes | `USER` | List the authenticated user's booking history (paginated, filterable by `status`). |
++| `GET` | `/api/bookings/my/active` | Yes | `USER` | Retrieve the user's current active booking (`CONFIRMED` or `ACTIVE`) along with slot, mall, and QR token display data. |
++| `GET` | `/api/bookings/:bookingId` | Yes | `USER` *(Owner)*, `MALL_OWNER` *(Mall owner)*, `GUARD` *(Assigned to mall)*, `ADMIN` | Retrieve detailed booking record (scoped strictly to the caller's ownership/assignment). |
++| `POST` | `/api/bookings/:bookingId/cancel` | Yes | `USER` *(Booking owner)* | Cancel an eligible `CONFIRMED` booking before entry, transition booking to `CANCELLED`, revoke `QRToken`, and conditionally release `ParkingSlot` (`{ _id: slotId, status: "RESERVED", activeBookingId: booking._id } -> AVAILABLE`). Returns `409` if booking is already `ACTIVE`, `COMPLETED`, `CANCELLED`, or `EXPIRED`. |
++| `GET` | `/api/malls/:mallId/bookings` | Yes | `MALL_OWNER` *(Owner of mall)*, `ADMIN` | List bookings for a specific mall with status and date filters. |
++
++---
++
++### 3.7 QR Operations (`/api/qr`)
++| Method | Route | Auth Required | Required Role | Purpose |
++| :--- | :--- | :--- | :--- | :--- |
++| `GET` | `/api/bookings/:bookingId/qr` | Yes | `USER` *(Booking owner)* | Retrieve the active QR payload/token string for a `CONFIRMED` or `ACTIVE` booking so the frontend can render the QR code. |
++| `POST` | `/api/qr/verify` | Yes | `GUARD` *(Assigned to booking's mall)* | Dry-run verification of a scanned QR token at the gate. Validates token hash, checks guard's `GuardAssignment` for the booking's `mallId`, and returns booking details, vehicle number, slot number, and allowed next action (`ENTRY` if `CONFIRMED`, `EXIT` if `ACTIVE`). |
++
++---
++
++### 3.8 Gate Entry and Exit Operations (`/api/operations`)
++| Method | Route | Auth Required | Required Role | Purpose |
++| :--- | :--- | :--- | :--- | :--- |
++| `POST` | `/api/operations/entry` | Yes | `GUARD` *(Assigned to booking's mall)* | Process vehicle gate entry using scanned QR token. Requires `Booking.status === "CONFIRMED"` and not expired. Atomically records server `entryTime`, transitions `Booking -> ACTIVE`, transitions `ParkingSlot` (`activeBookingId: booking._id -> OCCUPIED`), and marks `QRToken.entryScannedAt`. |
++| `POST` | `/api/operations/exit` | Yes | `GUARD` *(Assigned to booking's mall)* | Process vehicle gate exit using scanned QR token. Requires `Booking.status === "ACTIVE"`. Atomically records server `exitTime`, calculates duration and bill, transitions `Booking -> COMPLETED`, marks `QRToken -> CONSUMED`, and conditionally releases `ParkingSlot` (`activeBookingId: booking._id -> AVAILABLE`). |
++| `GET` | `/api/operations/recent` | Yes | `GUARD` *(Assigned to mall)* | List recent gate entry and exit scans processed at the guard's assigned mall. |
++
++---
++
++### 3.9 Billing (`/api/billing`)
++> **Provisional Billing Policy Note:** The MVP defaults to a minimum 1-hour charge and ceiling-based partial-hour rounding (`billableHours = Math.max(1, Math.ceil(durationMinutes / 60))`, `calculatedAmount = billableHours * hourlyRateSnapshot`). This policy is marked as a **provisional product decision** to be explicitly confirmed prior to Milestone 4 implementation.
++
++| Method | Route | Auth Required | Required Role | Purpose |
++| :--- | :--- | :--- | :--- | :--- |
++| `GET` | `/api/bookings/:bookingId/bill` | Yes | `USER` *(Booking owner)*, `MALL_OWNER` *(Mall owner)*, `GUARD` *(Assigned)*, `ADMIN` | Retrieve the itemized parking bill/receipt for a completed booking (`entryTime`, `exitTime`, `durationMinutes`, `billableHours`, `hourlyRateSnapshot`, `calculatedAmount`, `billingStatus`). |
++| `GET` | `/api/billing/my-history` | Yes | `USER` | List all generated bills/receipts for the authenticated user's completed bookings. |
++
++---
++
++### 3.10 Analytics (`/api/analytics`)
++| Method | Route | Auth Required | Required Role | Purpose |
++| :--- | :--- | :--- | :--- | :--- |
++| `GET` | `/api/analytics/owner/overview` | Yes | `MALL_OWNER` *(Account `ACTIVE`)* | Aggregated metrics across the authenticated owner's malls: total slots, current occupancy (`AVAILABLE`, `RESERVED`, `OCCUPIED`), active bookings, completed bookings, and total generated revenue. |
++| `GET` | `/api/analytics/owner/malls/:mallId` | Yes | `MALL_OWNER` *(Owner of mall)*, `ADMIN` | Detailed occupancy, booking status distribution, and revenue breakdown for a single mall. |
++| `GET` | `/api/analytics/admin/overview` | Yes | `ADMIN` | Platform-wide metrics: total users by role, pending/approved mall owners, pending/approved malls, total active bookings, platform occupancy, and total billed revenue across all malls. |
++
++---
++
++### 3.11 Admin Operations (`/api/admin`)
++| Method | Route | Auth Required | Required Role | Purpose |
++| :--- | :--- | :--- | :--- | :--- |
++| `GET` | `/api/admin/mall-owners` | Yes | `ADMIN` | List `MALL_OWNER` accounts filtered by `status` (`PENDING_APPROVAL`, `ACTIVE`, `REJECTED`, `SUSPENDED`). |
++| `PATCH` | `/api/admin/mall-owners/:userId/status` | Yes | `ADMIN` | Approve (`status: "ACTIVE"`), reject (`status: "REJECTED"` with `rejectionReason`), or suspend (`status: "SUSPENDED"`) a `MALL_OWNER` account. |
++| `GET` | `/api/admin/malls` | Yes | `ADMIN` | List all submitted malls filtered by `status` (`PENDING`, `APPROVED`, `REJECTED`, `INACTIVE`). |
++| `PATCH` | `/api/admin/malls/:mallId/status` | Yes | `ADMIN` | Approve (`status: "APPROVED"`), reject (`status: "REJECTED"` with `rejectionReason`), or deactivate (`status: "INACTIVE"`) a mall. |
++| `POST` | `/api/admin/guards` | Yes | `ADMIN` | Admin endpoint to provision a `GUARD` account and assign them to any `Mall`. |
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+new file mode 100644
+index 0000000..187b159
+--- /dev/null
++++ b/docs/ARCHITECTURE.md
+@@ -0,0 +1,389 @@
++# ParkEase — System Architecture (`docs/ARCHITECTURE.md`)
++
++> **Document Status:** Milestone 0 Approved Architecture Baseline (Revised)  
++> **Repository:** `https://github.com/itzshikharofficial12/ParkEase`  
++> **Scope:** Full MVP Architecture, Component Boundaries, Security Model, and Concurrency/Recovery Strategy
++
++---
++
++## 1. Executive Overview
++
++**ParkEase** is a Smart Mall Parking Intelligence System built on the MERN stack (`MongoDB`, `Express 5`, `React 19`, `Node.js >= 22.12`) organized as an npm workspace monorepo (`client` and `server`).
++
++ParkEase manages the complete parking lifecycle across four distinct actors:
++1. **`USER`** — Discovers approved malls, checks real-time slot availability, reserves a parking slot (maximum one active booking at a time), presents a cryptographic QR token at the mall gate, and views calculated parking bills and booking history.
++2. **`MALL_OWNER`** — Registers publicly (subject to Admin account approval), submits mall profiles (subject to separate Admin mall approval), configures parking slots and hourly pricing, provisions and assigns `GUARD` accounts to their malls, and views mall-scoped occupancy and revenue analytics.
++3. **`GUARD`** — Operates at a specific assigned mall (`GuardAssignment`), verifies customer QR tokens at entry and exit gates, triggers conditional atomic state transitions (`CONFIRMED -> ACTIVE` on entry, `ACTIVE -> COMPLETED` on exit), and views real-time gate verification results and generated exit bills.
++4. **`ADMIN`** — Approves or rejects `MALL_OWNER` accounts, approves or rejects submitted `Mall` entities, provisions `GUARD` accounts when needed, and monitors platform-wide operational and financial analytics.
++
++---
++
++## 2. Current Repository Audit & Baseline Assessment
++
++### 2.1 Existing Monorepo Structure
++```text
++ParkEase/
++├── client/                          # React 19 + Vite 7 frontend workspace (parkease-client)
++│   ├── public/favicon.svg
++│   ├── src/
++│   │   ├── assets/.gitkeep
++│   │   ├── components/
++│   │   │   ├── FeatureCard.jsx      # Landing page feature card
++│   │   │   ├── Footer.jsx           # Site footer
++│   │   │   ├── Navbar.jsx           # Public top navigation bar
++│   │   │   └── PageContainer.jsx    # Standard layout wrapper for simple pages
++│   │   ├── pages/
++│   │   │   ├── DashboardPage.jsx    # Public placeholder for future dashboards
++│   │   │   ├── HomePage.jsx         # Landing page with live /api/health check (5s timeout)
++│   │   │   ├── LoginPage.jsx        # Placeholder page
++│   │   │   ├── NotFoundPage.jsx     # 404 catch-all route page
++│   │   │   └── RegisterPage.jsx     # Placeholder page
++│   │   ├── services/
++│   │   │   └── api.js               # Base fetch wrapper (VITE_API_URL)
++│   │   ├── utils/.gitkeep
++│   │   ├── App.jsx                  # React Router v7 route definitions
++│   │   ├── index.css                # Global design tokens and responsive CSS
++│   │   └── main.jsx                 # React DOM root + BrowserRouter
++│   ├── .env.example
++│   ├── index.html
++│   ├── package.json
++│   └── vite.config.js               # Port 5173, strictPort: true
++├── server/                          # Express 5 + Mongoose 8 backend workspace (parkease-server)
++│   ├── src/
++│   │   ├── config/
++│   │   │   └── db.js                # Mongoose connection + URI protocol validation
++│   │   ├── constants/
++│   │   │   └── roles.js             # ROLES = { USER, MALL_OWNER, GUARD, ADMIN }
++│   │   ├── controllers/
++│   │   │   └── healthController.js  # GET /api/health handler
++│   │   ├── middleware/
++│   │   │   ├── errorHandler.js      # Centralized error boundary (sanitizes 500s)
++│   │   │   └── notFound.js          # JSON 404 handler
++│   │   ├── models/.gitkeep          # Empty (no Mongoose schemas yet)
++│   │   ├── routes/
++│   │   │   ├── healthRoutes.js      # Mounts GET /
++│   │   │   └── index.js             # Mounts /health under /api
++│   │   ├── services/.gitkeep        # Empty (no business services yet)
++│   │   ├── utils/.gitkeep           # Empty (no utilities yet)
++│   │   ├── app.js                   # Express 5 app setup (cors, json 100kb, routes, middleware)
++│   │   └── server.js                # dotenv bootstrap, connectDB(), port validation, app.listen()
++│   ├── test/
++│   │   └── app.test.js              # Node built-in test runner suite (health, CORS, 404, 400, 500, DB URI)
++│   ├── .env.example
++│   └── package.json
++├── docs/                            # Architectural & milestone documentation (added in Milestone 0)
++├── CONTRIBUTING.md                  # Legacy 4-person team guide (superseded by solo workflow in docs/)
++├── README.md                        # Repository overview & setup instructions
++├── eslint.config.mjs                # Root flat ESLint v9 config covering client & server
++└── package.json                     # Root workspace configuration & scripts
++```
++
++### 2.2 Technical Strengths of the Existing Foundation
++- **Clean App/Server Separation:** `server/src/app.js` exports the configured Express 5 application without binding a port or connecting to MongoDB, enabling fast, isolated HTTP testing in `server/test/app.test.js` via ephemeral ports (`app.listen(0, "127.0.0.1")`).
++- **Express 5 Native Promise Rejection Handling:** Express 5 (`^5.1.0`) automatically forwards rejected promises from `async` route handlers and middleware to `errorHandler.js` without requiring `express-async-handler` wrappers.
++- **Credential-Safe Startup & Error Boundary:** `server.js` and `errorHandler.js` intentionally suppress raw stack traces and connection strings so database credentials never leak to logs or HTTP clients.
++- **Zero-Bloat Testing:** Uses Node.js 22's built-in `node:test` and `node:assert/strict` modules along with native `fetch`.
++
++### 2.3 Identified Architectural Gaps & Technical Risks in Current Codebase
++1. **Overly Restrictive Error Handler (`server/src/middleware/errorHandler.js`):**
++   - Currently hardcodes messages (`400 -> "Invalid request body"`, `413 -> "Request body too large"`, everything else `-> "Something went wrong"`).
++   - **Impact:** Domain errors (`401 Unauthorized`, `403 Forbidden`, `404 Not Found`, `409 Conflict`, `400 Validation Error`) thrown by services or controllers will have their status codes preserved if `err.status` is set, **but their `err.message` will be overwritten with `"Something went wrong"`**.
++   - **Resolution (Milestone 1):** Introduce an operational `AppError` utility class (`server/src/utils/AppError.js`) with `isOperational = true`, `status`, `code`, and `details`, and update `errorHandler.js` to preserve `err.message` for operational errors while keeping generic `"Invalid request body"` for `SyntaxError` (malformed JSON) and `"Something went wrong"` for unexpected 500s.
++2. **CORS Credentials & Cookie Transport (`server/src/app.js`):**
++   - Currently configures `cors({ origin: process.env.CLIENT_URL || "http://localhost:5173" })` without `credentials: true`.
++   - **Resolution (Milestone 1):** Enable `credentials: true` in `cors()` so the browser can send and receive the `HttpOnly` refresh token cookie across `http://localhost:5173` (Vite) and `http://localhost:5000` (Express), and enforce `Origin` verification on cookie-authenticated endpoints.
++3. **Minimal API Client (`client/src/services/api.js`):**
++   - Currently throws generic `new Error(\`API request failed (\${response.status})\`)` without parsing the backend's JSON error body (`{ success: false, message, error }`), lacks in-memory `Authorization: Bearer <accessToken>` injection, and lacks silent `401` refresh retry via the `HttpOnly` refresh cookie.
++4. **Documentation Drift (`README.md` & `CONTRIBUTING.md`):**
++   - Both files reference the upstream repository (`https://github.com/oceankumar/ParkEase`) and a four-person team split, whereas this repository (`https://github.com/itzshikharofficial12/ParkEase`) is developed independently and incorporates expanded product requirements (separate Mall Owner account approval vs. Mall approval, Guard provisioning by Mall Owners and Admins, `GuardAssignment`, `RefreshToken`, and `QRToken` models).
++
++---
++
++## 3. High-Level System Architecture
++
++```mermaid
++flowchart TD
++    subgraph Client ["React 19 SPA (Vite :5173)"]
++        UI_Public["Public Pages (Home, Mall Discovery, Auth)"]
++        UI_User["User Portal (Booking, QR Display, Bills)"]
++        UI_Owner["Mall Owner Dashboard (Malls, Slots, Guards, Analytics)"]
++        UI_Guard["Guard Gate Console (QR Scanner, Entry/Exit, Bill View)"]
++        UI_Admin["Admin Console (Owner Approvals, Mall Approvals, Platform Analytics)"]
++        AuthCtx["AuthContext (Access Token in Memory ONLY, Role State)"]
++        APIClient["Services / API Client (Fetch + Bearer Header + credentials: include)"]
++    end
++
++    subgraph Server ["Express 5 REST API (:5000)"]
++        CORS_MW["Credentialed CORS + JSON Parser (100kb) + Rate Limiter + CSRF Origin Check"]
++        Router["API Router (/api/*)"]
++        Auth_MW["Auth & RBAC Middleware (authenticate, authorize, requireApprovedOwner, requireMallAccess)"]
++        Controllers["Controllers (HTTP I/O, Cookie Setter & Validation)"]
++        Services["Domain Services (Auth, Mall, Slot, Booking, QR, Billing, Analytics)"]
++        Err_MW["Centralized Error Handler (AppError + Safe 500s)"]
++    end
++
++    subgraph Database ["MongoDB 6.0+ / 7.0+ (Mongoose 8)"]
++        Col_Users[("users")]
++        Col_Tokens[("refreshtokens")]
++        Col_Malls[("malls")]
++        Col_Guards[("guardassignments")]
++        Col_Slots[("parkingslots")]
++        Col_Bookings[("bookings")]
++        Col_QRTokens[("qrtokens")]
++    end
++
++    UI_Public & UI_User & UI_Owner & UI_Guard & UI_Admin --> AuthCtx
++    AuthCtx --> APIClient
++    APIClient -->|"Bearer JWT (Memory) + HttpOnly Refresh Cookie"| CORS_MW
++    CORS_MW --> Router
++    Router --> Auth_MW
++    Auth_MW --> Controllers
++    Controllers --> Services
++    Services --> Col_Users & Col_Tokens & Col_Malls & Col_Guards & Col_Slots & Col_Bookings & Col_QRTokens
++    Controllers -.->|"Throws AppError / Next"| Err_MW
++    Services -.->|"Throws AppError"| Err_MW
++```
++
++---
++
++## 4. Backend Layered Architecture & Responsibilities
++
++The backend strictly preserves the existing folder structure under `server/src/` (adding `server/src/scripts/` for operational CLI scripts such as Admin seeding):
++
++| Layer | Directory | Core Responsibility | Prohibited Actions |
++| :--- | :--- | :--- | :--- |
++| **Configuration** | `server/src/config/` | Database connection (`db.js`), environment validation (`env.js`). | Business logic, HTTP handling. |
++| **Constants** | `server/src/constants/` | Immutable domain enums: `roles.js`, `statuses.js` (user, mall, slot, booking, token states). | Stateful code, database imports. |
++| **Routes** | `server/src/routes/` | Express `Router` definitions, path mapping, middleware chaining (`authenticate`, `authorize`, rate limiters). | Direct `req`/`res` manipulation, database queries. |
++| **Middleware** | `server/src/middleware/` | Cross-cutting HTTP pipeline steps: JWT verification, RBAC checks, CSRF/Origin checks, input validation, error handling. | Complex domain mutations. |
++| **Controllers** | `server/src/controllers/` | Extract `req.params`, `req.query`, `req.body`, `req.user`, `HttpOnly` cookies; invoke Service methods; set/clear cookies; return standardized JSON responses (`200`, `201`). | Direct `Model.find()`/`save()` calls, complex state machine transitions. |
++| **Services** | `server/src/services/` | Core domain logic, state machine enforcement, conditional atomic slot allocation, reconciliation, QR signing/verification, billing math, Mongoose queries. | Referencing `req` or `res` objects directly. |
++| **Models** | `server/src/models/` | Mongoose schemas, field types, compound indexes, partial unique indexes, schema methods/hooks. | Importing services or controllers (prevents circular dependencies). |
++| **Utilities** | `server/src/utils/` | Stateless helpers (`AppError.js`, `jwt.js`, `cookies.js`, `password.js`, `validators.js`, `pricing.js`). | Database calls or stateful side effects. |
++| **Scripts** | `server/src/scripts/` | CLI maintenance/bootstrap scripts (`seedAdmin.js`). | Imported by HTTP request handlers. |
++
++---
++
++## 5. Critical Domain Workflows & Architectural Validation
++
++### 5.1 Authentication, In-Memory Access Tokens & HttpOnly Refresh Cookies
++
++ParkEase separates short-lived API authorization from long-lived session persistence to protect against both XSS token theft and CSRF attacks:
++
++1. **Access Token (Short-Lived JWT in React Memory):**
++   - Issued with a 15-minute expiry (`JWT_ACCESS_EXPIRES_IN=15m`) containing `{ sub: userId, role, status }`.
++   - Returned in the JSON response body of `POST /api/auth/register`, `POST /api/auth/login`, and `POST /api/auth/refresh`.
++   - Stored **exclusively in React memory** (`AuthContext` state / module-scoped variable in `api.js`), **never** in `localStorage` or `sessionStorage`.
++   - Attached to API requests via `Authorization: Bearer <accessToken>`.
++2. **Refresh Token (`HttpOnly` Cookie + Hashed DB State):**
++   - Generated as a cryptographically random 32-byte hex token with a 7-day expiry (`JWT_REFRESH_EXPIRES_IN=7d`).
++   - **Never** exposed in JSON response bodies and **never** stored in `localStorage`.
++   - Stored in MongoDB (`RefreshToken` collection) **only as a SHA-256 hash** (`tokenHash`), linked to a rotation `familyId`.
++   - Delivered to the browser via `Set-Cookie` (`parkease_refresh_token`):
++     - **Local Development (`NODE_ENV !== "production"`):** `HttpOnly; Path=/api/auth; SameSite=Lax; Max-Age=604800` (`Secure=false` so `http://localhost` works without TLS).
++     - **Production (`NODE_ENV === "production"`):** `HttpOnly; Secure; Path=/api/auth; SameSite=Strict; Max-Age=604800` (or `SameSite=Lax` when frontend and API share the same registrable domain).
++3. **Refresh Token Rotation & Reuse Detection:**
++   - On page reload (`AuthContext` initialization) or when an API request fails with `401 Unauthorized`, the frontend calls `POST /api/auth/refresh` with `credentials: "include"`.
++   - The server hashes the incoming `parkease_refresh_token` cookie, looks up the `RefreshToken` record, and checks if `revokedAt` is already set.
++   - **If `revokedAt` is set (Token Reuse Detected):** The server immediately revokes **all** refresh tokens sharing that `familyId`, clears the cookie, and returns `401 Unauthorized`.
++   - **If valid:** The server marks the current `RefreshToken` as revoked (`revokedAt = now`, `replacedByTokenHash = newHash`), inserts a new `RefreshToken` in the same `familyId`, sets the rotated `HttpOnly` cookie, and returns a fresh `accessToken` in the JSON response.
++4. **Credentialed CORS & CSRF Protection on `/api/auth/refresh` and `/api/auth/logout`:**
++   - Because the browser automatically attaches `parkease_refresh_token` to requests under `/api/auth`, endpoints that rely on the cookie (`/api/auth/refresh` and `/api/auth/logout`) must defend against Cross-Site Request Forgery (CSRF):
++     1. **Strict Cookie Path & SameSite:** `Path=/api/auth` prevents the cookie from being sent to any business endpoint (`/api/bookings`, `/api/malls`, etc.), and `SameSite=Lax` / `Strict` blocks cross-site subresource `POST` requests in modern browsers.
++     2. **Origin Header Verification Middleware (`verifyCsrfOrigin`):** For state-changing requests under `/api/auth`, the server verifies that `req.headers.origin` (when present) strictly matches `process.env.CLIENT_URL || "http://localhost:5173"`.
++     3. **Custom Header Requirement (`X-Requested-With: XMLHttpRequest`):** The frontend `apiRequest` helper sends `X-Requested-With: XMLHttpRequest` on all requests. Because cross-origin requests cannot set custom headers without passing a CORS preflight check (`Access-Control-Allow-Origin: CLIENT_URL`), a cross-origin HTML form or script cannot forge a call to `/api/auth/refresh` or `/api/auth/logout`.
++
++---
++
++### 5.2 Two-Stage Approval Architecture (Mall Owner Account vs. Mall Entity)
++A core product requirement is that **Mall Owner account approval** and **Mall approval** are distinct lifecycles:
++
++```mermaid
++stateDiagram-v2
++    state "1. Mall Owner Account Lifecycle (User.status)" as Account {
++        [*] --> PENDING_APPROVAL : Public Registration (role = MALL_OWNER)
++        PENDING_APPROVAL --> ACTIVE : Admin Approves Owner Account
++        PENDING_APPROVAL --> REJECTED : Admin Rejects Owner Account
++        ACTIVE --> SUSPENDED : Admin Suspends Account
++    }
++
++    state "2. Mall Entity Lifecycle (Mall.status)" as MallState {
++        [*] --> PENDING : Approved Owner Creates Mall
++        PENDING --> APPROVED : Admin Approves Mall
++        PENDING --> REJECTED : Admin Rejects Mall
++        APPROVED --> INACTIVE : Owner/Admin Deactivates Mall
++    }
++```
++
++- **Why this separation matters:**
++  - A `MALL_OWNER` with `User.status === "PENDING_APPROVAL"` can log in and view their pending onboarding status on their dashboard, but **cannot** create malls, create slots, or provision guards (`403 Forbidden` via `requireApprovedOwner` middleware).
++  - Once `User.status === "ACTIVE"`, the owner can create one or more `Mall` records. Each new `Mall` starts with `Mall.status === "PENDING"`.
++  - While a `Mall` is `PENDING`, the owner can configure its metadata and pre-populate `ParkingSlot` inventory, but public users cannot discover or book slots in that mall until an `ADMIN` transitions `Mall.status` to `APPROVED`.
++
++---
++
++### 5.3 Guard Provisioning & Mall-Scoped Authorization (`GuardAssignment`)
++- Guards (`role === "GUARD"`) cannot self-register publicly.
++- Guards are provisioned either by:
++  1. An approved `MALL_OWNER` (for a mall owned by that `MALL_OWNER`), or
++  2. An `ADMIN` (for any mall).
++- When a Guard is created or assigned, a `GuardAssignment` document links `guardId` (`User`) to `mallId` (`Mall`) with `isActive: true`.
++- Every guard operation (QR scan, gate entry, gate exit) validates via `GuardAssignment` that the authenticated guard is actively assigned to the target booking's `mallId`. A guard assigned to Mall A receives `403 Forbidden` if attempting to scan a QR token for Mall B.
++
++---
++
++### 5.4 MongoDB Consistency, Conditional Atomic Slot Reservation & Crash Recovery Strategy
++
++Parking slot reservation enforces two strict concurrency invariants:
++1. **No Double-Booking of a Slot:** Concurrent requests for the last `AVAILABLE` slot in a mall must result in at most one `201 Created` and `409 Conflict` for all losing requests.
++2. **One Active Booking Per User:** A user cannot hold more than one booking in `CONFIRMED` or `ACTIVE` status simultaneously, even if they fire parallel requests.
++
++#### Why Multi-Document Transactions Cannot Be Assumed in Default Local Setup
++- Multi-document ACID transactions (`session.withTransaction()`) in MongoDB require a **Replica Set** (or sharded cluster). On a default local standalone `mongod` instance (`mongodb://127.0.0.1:27017/parkease` in `server/.env.example`), starting a transaction throws `MongoServerError: Transaction numbers are only allowed on a replica set member or mongos`.
++- Therefore, the MVP uses **Conditional Single-Document Atomic Updates (`findOneAndUpdate`) + Partial Unique Indexes + Correlation-Guarded Rollback + Orphan Reconciliation**.
++
++#### Important Limitation: Compensating Rollback Is Not an ACID Transaction
++While `ParkingSlot.findOneAndUpdate()` is strictly atomic at the single-document level, **application-level compensating rollback does NOT provide full multi-document ACID transaction guarantees**. Specifically, consider the following failure scenario:
++1. **Step 1 Succeeds:** `ParkingSlot.findOneAndUpdate()` transitions Slot `A-01` from `AVAILABLE` to `RESERVED`.
++2. **Step 2 Fails or Crashes:** Either:
++   - `Booking.create()` fails (e.g., network drop, validation error, or duplicate active booking `E11000`) **and** the subsequent compensating `ParkingSlot` rollback query also fails due to a transient database disconnect, **OR**
++   - The Node.js process crashes (`SIGKILL`, power loss, OOM) in the milliseconds between `ParkingSlot.findOneAndUpdate()` succeeding and `Booking.create()` executing.
++3. **Resulting Inconsistency (Orphaned Reserved Slot):** Slot `A-01` remains in `status: "RESERVED"` in MongoDB without a corresponding `CONFIRMED` or `ACTIVE` `Booking` document.
++
++#### Reliable Correlation, Rollback & Recovery Design
++To make conditional reservation safe against race conditions, stale rollbacks, and process crashes, `ParkingSlot` tracks `activeBookingId` (the pre-generated `_id` of the `Booking` being created) and `reservedAt`:
++
++```mermaid
++sequenceDiagram
++    participant U as User (Client)
++    participant S as BookingService
++    participant DB as MongoDB
++
++    U->>S: POST /api/bookings { mallId, vehicleNumber }
++    S->>S: 1. Pre-generate bookingId = new ObjectId()
++    S->>DB: 2. Check Mall is APPROVED & User has no active booking
++    S->>DB: 3. Conditional Atomic Claim: ParkingSlot.findOneAndUpdate(<br/>{ mallId, status: 'AVAILABLE', isActive: true },<br/>{ $set: { status: 'RESERVED', activeBookingId: bookingId, reservedAt: now } },<br/>{ sort: { slotNumber: 1 }, new: true })
++    alt No AVAILABLE slot matched
++        DB-->>S: null (Trigger lazy orphan cleanup for mallId, then return 409)
++        S-->>U: 409 Conflict ("No available parking slots")
++    else Slot claimed atomically with activeBookingId = bookingId
++        DB-->>S: reservedSlot (_id, activeBookingId: bookingId)
++        S->>DB: 4. Booking.create({ _id: bookingId, userId, mallId, slotId: reservedSlot._id, status: 'CONFIRMED', expiresAt, ... })
++        alt Booking.create or QRToken.create fails
++            DB-->>S: Error (e.g. E11000 on userId or write error)
++            S->>DB: 5a. Safe Conditional Rollback: ParkingSlot.findOneAndUpdate(<br/>{ _id: reservedSlot._id, status: 'RESERVED', activeBookingId: bookingId },<br/>{ $set: { status: 'AVAILABLE', activeBookingId: null, reservedAt: null } })
++            S-->>U: 409 Conflict / 500 Error
++        else Booking & QRToken created successfully
++            DB-->>S: booking + qrToken
++            S-->>U: 201 Created (Booking + QR Payload)
++        end
++    end
++```
++
++1. **Safe Rollback Condition (Prevents Releasing Another Booking's Slot):**
++   - Because `bookingId = new mongoose.Types.ObjectId()` is generated *before* claiming the slot and written into `ParkingSlot.activeBookingId`, any rollback (on `Booking.create` failure or `QRToken.create` failure) or cancellation query **must include `activeBookingId: bookingId` in its filter**:
++     ```js
++     await ParkingSlot.findOneAndUpdate(
++       { _id: reservedSlot._id, status: "RESERVED", activeBookingId: bookingId },
++       { $set: { status: "AVAILABLE", activeBookingId: null, reservedAt: null } }
++     );
++     ```
++   - This guarantees that even if a process stalls and resumes later, it can **never** release a slot that was already reclaimed and allocated to a different `bookingId`.
++2. **Reservation Expiry (`Booking.expiresAt`):**
++   - Every `CONFIRMED` booking sets `expiresAt = new Date(now + RESERVATION_EXPIRY_MINUTES * 60000)` (e.g., 60 minutes).
++   - If the user does not complete gate entry before `expiresAt`, the reconciliation process transitions the booking `{ _id: booking._id, status: "CONFIRMED", expiresAt: { $lte: now } } -> { status: "EXPIRED", billingStatus: "WAIVED" }`, marks `QRToken -> EXPIRED`, and conditionally releases the slot `{ _id: booking.slotId, status: "RESERVED", activeBookingId: booking._id } -> { status: "AVAILABLE", activeBookingId: null, reservedAt: null }`.
++3. **Orphaned Slot Cleanup / Reconciliation Process (`reconcileStaleReservations`):**
++   - To recover from the crash scenario where `ParkingSlot.findOneAndUpdate` succeeded but `Booking.create` never completed (or rollback failed):
++   - Any `ParkingSlot` with `status: "RESERVED"` and `reservedAt <= new Date(now - ORPHAN_GRACE_MS)` (e.g., `ORPHAN_GRACE_MS = 60_000` — 60 seconds, far longer than normal booking creation) is checked against the `Booking` collection:
++     - If no `Booking` document exists with `_id: slot.activeBookingId` (or its status is already `CANCELLED`, `EXPIRED`, or `COMPLETED`), the reconciliation function executes:
++       ```js
++       await ParkingSlot.findOneAndUpdate(
++         { _id: slot._id, status: "RESERVED", activeBookingId: slot.activeBookingId },
++         { $set: { status: "AVAILABLE", activeBookingId: null, reservedAt: null } }
++       );
++       ```
++   - **When Reconciliation Runs:**
++     - **Periodically:** Via a background interval (`setInterval` in `server.js` every 60 seconds, `unref()`ed so it never blocks process exit).
++     - **On-Demand / Lazily:** Before returning `409 No available parking slots` during booking creation or availability queries for a mall.
++4. **Future Option — MongoDB Replica Set Transactions:**
++   - When deployed against MongoDB Atlas or a local single-node replica set (`mongod --replSet rs0`), `BookingService.createBooking` can wrap `ParkingSlot.findOneAndUpdate`, `Booking.create`, and `QRToken.create` inside `mongoose.connection.transaction(async (session) => { ... })` while retaining the exact same `activeBookingId` correlation and partial unique indexes.
++
++---
++
++### 5.5 QR Verification, Entry, Exit & Provisional Billing Lifecycle
++1. **Booking Creation (`CONFIRMED`):** Server generates a cryptographically random secret token, stores its SHA-256 hash in `QRToken` (`status: "ACTIVE"`), and returns the QR token string to the authenticated booking owner.
++2. **Gate Entry (`CONFIRMED -> ACTIVE`):**
++   - Guard scans QR token -> `POST /api/operations/entry`.
++   - Server verifies Guard's `GuardAssignment` for the booking's `mallId`.
++   - Server conditionally and atomically transitions `Booking` (`{ _id, status: "CONFIRMED" } -> { status: "ACTIVE", entryTime: now }`), transitions `ParkingSlot` (`{ _id: slotId, activeBookingId: booking._id } -> { status: "OCCUPIED" }`), and sets `entryScannedAt` on `QRToken` (preventing entry replay).
++3. **Gate Exit & Billing (`ACTIVE -> COMPLETED`):**
++   - Guard scans QR token -> `POST /api/operations/exit`.
++   - Server conditionally transitions `Booking` (`{ _id, status: "ACTIVE" } -> { status: "COMPLETED", exitTime: now }`), consumes `QRToken` (`status: "CONSUMED"`, `exitScannedAt: now`), and releases `ParkingSlot` (`{ _id: slotId, activeBookingId: booking._id } -> { status: "AVAILABLE", activeBookingId: null, reservedAt: null }`).
++4. **Provisional Billing Policy (Requires Product Confirmation Before Milestone 4):**
++   - **Provisional MVP Default:**
++     - `durationMinutes = Math.max(1, Math.ceil((exitTime - entryTime) / 60000))`
++     - `billableHours = Math.max(1, Math.ceil(durationMinutes / 60))` (minimum 1-hour charge; partial hours rounded up to the next full hour).
++     - `calculatedAmount = billableHours * hourlyRateSnapshot` (using the mall's hourly rate snapshotted at booking creation time).
++   - **Product Decision Gate:** This ceiling-based hourly calculation and 1-hour minimum charge is a **provisional MVP default** and must be explicitly confirmed before implementing the Milestone 4 billing service.
++
++---
++
++## 6. Frontend Architecture Evolution
++
++The React 19 frontend (`client/src/`) will evolve incrementally from the current foundation without rewriting existing working styles or layout primitives:
++
++```text
++client/src/
++├── assets/
++├── components/
++│   ├── FeatureCard.jsx          # Existing
++│   ├── Footer.jsx               # Existing
++│   ├── Navbar.jsx               # Existing (evolve to become auth & role-aware)
++│   ├── PageContainer.jsx        # Existing
++│   ├── ProtectedRoute.jsx       # Route guard checking authentication & allowed roles
++│   ├── StatusBadge.jsx          # Reusable badge for Booking/Slot/Mall statuses
++│   └── LoadingSpinner.jsx       # Standardized loading state
++├── context/
++│   └── AuthContext.jsx          # Holds user profile & accessToken in memory; calls /auth/refresh on mount
++├── hooks/
++│   └── useAuth.js               # Convenience hook for consuming AuthContext
++├── pages/
++│   ├── HomePage.jsx             # Existing
++│   ├── LoginPage.jsx            # Existing (upgrade from placeholder to functional form)
++│   ├── RegisterPage.jsx         # Existing (upgrade to support USER and MALL_OWNER tabs)
++│   ├── DashboardPage.jsx        # Existing (upgrade to role-based router/dispatcher)
++│   ├── NotFoundPage.jsx         # Existing
++│   ├── malls/                   # Public mall discovery & slot availability views
++│   ├── user/                    # User active booking, QR code view, booking/bill history
++│   ├── owner/                   # Mall Owner onboarding banner, mall/slot/guard CRUD, analytics
++│   ├── guard/                   # Guard gate scanner (QR input/camera), entry/exit confirmation
++│   └── admin/                   # Admin owner approvals, mall approvals, platform analytics
++├── services/
++│   ├── api.js                   # Existing (enhance with in-memory Bearer token, credentials: "include", 401 refresh retry)
++│   ├── authService.js           # Auth API calls
++│   ├── mallService.js           # Mall & slot API calls
++│   ├── bookingService.js        # Booking & QR API calls
++│   └── adminService.js          # Admin approval & analytics API calls
++└── utils/
++    └── constants.js             # Frontend mirror of ROLES and status labels
++```
++
++---
++
++## 7. Security Boundaries & Trust Model
++
++1. **Frontend vs. Backend Trust Boundary:**
++   - React Router guards (`ProtectedRoute.jsx`) and role-based UI visibility exist strictly for user experience.
++   - The Express backend enforces authentication (`authenticate` middleware), role authorization (`authorize(...roles)` middleware), account state (`User.status === "ACTIVE"`), and resource ownership (`Mall.ownerId === req.user.id` or `GuardAssignment`) on every protected endpoint.
++2. **Token Storage & Transport Security:**
++   - Access tokens live only in JavaScript memory (`AuthContext` / `api.js`), eliminating persistent XSS theft from `localStorage`.
++   - Refresh tokens live only in an `HttpOnly`, path-restricted (`Path=/api/auth`), `SameSite` cookie and are stored as SHA-256 hashes in MongoDB.
++   - CSRF protection is enforced via `SameSite` cookie attributes, `Origin` verification (`CLIENT_URL`), and custom header verification (`X-Requested-With: XMLHttpRequest`).
++3. **Never Trust Client-Supplied Authority Fields:**
++   - `userId`, `ownerId`, `guardId`, `entryTime`, `exitTime`, `hourlyRate`, `calculatedAmount`, and approval statuses are **never** accepted from request payloads; they are derived exclusively from `req.user`, server clock (`new Date()`), and database state.
++4. **Privilege Escalation Prevention & Admin Bootstrap:**
++   - Public registration (`POST /api/auth/register`) only permits `role: "USER"` (immediately `ACTIVE`) or `role: "MALL_OWNER"` (forced to `status: "PENDING_APPROVAL"`).
++   - `ADMIN` accounts are provisioned exclusively via the idempotent server-side bootstrap script (`npm run seed:admin --workspace server`).
++5. **Environment & Secret Isolation:**
++   - `client/.env` (`VITE_*`) contains only the public API base URL (`VITE_API_URL`).
++   - JWT signing secrets (`JWT_ACCESS_SECRET`, `QR_TOKEN_SECRET`), `ADMIN_PASSWORD`, and `MONGODB_URI` reside exclusively in `server/.env`.
+diff --git a/docs/DATABASE_DESIGN.md b/docs/DATABASE_DESIGN.md
+new file mode 100644
+index 0000000..1f2880e
+--- /dev/null
++++ b/docs/DATABASE_DESIGN.md
+@@ -0,0 +1,365 @@
++# ParkEase — Database Architecture & Entity Design (`docs/DATABASE_DESIGN.md`)
++
++> **Document Status:** Milestone 0 Approved Schema & Index Specification (Revised)  
++> **Database Engine:** MongoDB 6.0+ / 7.0+ / 8.0+ with Mongoose 8 (`^8.19.2`)  
++> **Scope:** Complete Entity-Relationship Model, Field Specifications, Status Enums, Unique Constraints, Concurrency Indexes, and Orphan Recovery
++
++---
++
++## 1. Entity-Relationship Overview
++
++ParkEase models seven core collections in MongoDB:
++1. **`User`** (`users`) — All actors (`USER`, `MALL_OWNER`, `GUARD`, `ADMIN`) and their account approval/lifecycle status.
++2. **`RefreshToken`** (`refreshtokens`) — Stateful refresh token sessions storing only SHA-256 token hashes (`tokenHash`) to back `HttpOnly` cookie rotation, reuse detection, and revocation.
++3. **`Mall`** (`malls`) — Mall profiles submitted by approved `MALL_OWNER` accounts and approved by `ADMIN`.
++4. **`GuardAssignment`** (`guardassignments`) — Maps `GUARD` users to the specific `Mall` where they are authorized to operate gates.
++5. **`ParkingSlot`** (`parkingslots`) — Individual physical parking spaces within a `Mall`, their real-time occupancy state, and their active booking correlation fields (`activeBookingId`, `reservedAt`).
++6. **`Booking`** (`bookings`) — Reservation lifecycle, entry/exit timestamps, rate snapshot, and generated billing data.
++7. **`QRToken`** (`qrtokens`) — Server-verifiable cryptographic token metadata bound 1:1 to a `Booking` to prevent forgery and replay attacks.
++
++```mermaid
++erDiagram
++    User ||--o{ RefreshToken : "holds sessions"
++    User ||--o{ Mall : "owns (MALL_OWNER)"
++    User ||--o{ Mall : "approves (ADMIN)"
++    User ||--o{ GuardAssignment : "assigned as (GUARD)"
++    Mall ||--o{ GuardAssignment : "employs guards"
++    Mall ||--o{ ParkingSlot : "contains inventory"
++    User ||--o{ Booking : "reserves (USER)"
++    Mall ||--o{ Booking : "hosts booking"
++    ParkingSlot ||--o{ Booking : "allocated to"
++    Booking ||--|| QRToken : "verified by"
++```
++
++---
++
++## 2. Canonical Status & Role Enums (`server/src/constants/`)
++
++All status values must be stored as uppercase string constants exported from `server/src/constants/`.
++
++### 2.1 User Roles (`ROLES` in `server/src/constants/roles.js`)
++| Enum Key | Value | Description |
++| :--- | :--- | :--- |
++| `USER` | `"USER"` | Standard customer booking parking slots. |
++| `MALL_OWNER` | `"MALL_OWNER"` | Commercial partner managing malls, slots, and guards. |
++| `GUARD` | `"GUARD"` | Operational staff verifying QR codes and recording gate entry/exit. |
++| `ADMIN` | `"ADMIN"` | Platform administrator approving owners/malls and viewing global analytics. |
++
++### 2.2 User Account Status (`USER_STATUS`)
++| Enum Key | Value | Allowed Transitions | Description |
++| :--- | :--- | :--- | :--- |
++| `PENDING_APPROVAL` | `"PENDING_APPROVAL"` | `-> ACTIVE`, `-> REJECTED` | Initial state for publicly registered `MALL_OWNER` accounts. |
++| `ACTIVE` | `"ACTIVE"` | `-> SUSPENDED` | Default initial state for `USER`, `GUARD`, and `ADMIN`; approved state for `MALL_OWNER`. |
++| `REJECTED` | `"REJECTED"` | `-> ACTIVE` *(Admin re-review)* | `MALL_OWNER` registration rejected by Admin. |
++| `SUSPENDED` | `"SUSPENDED"` | `-> ACTIVE` | Account disabled by Admin or Mall Owner (for their Guard). |
++
++### 2.3 Mall Approval Status (`MALL_STATUS`)
++| Enum Key | Value | Allowed Transitions | Description |
++| :--- | :--- | :--- | :--- |
++| `PENDING` | `"PENDING"` | `-> APPROVED`, `-> REJECTED` | Initial state when an active `MALL_OWNER` submits a new mall. |
++| `APPROVED` | `"APPROVED"` | `-> INACTIVE` | Approved by `ADMIN`; visible in public discovery and open for bookings. |
++| `REJECTED` | `"REJECTED"` | `-> PENDING` *(on owner resubmission)* | Rejected by `ADMIN` with `rejectionReason`. |
++| `INACTIVE` | `"INACTIVE"` | `-> APPROVED` | Temporarily closed for new bookings by Owner or Admin. |
++
++### 2.4 Parking Slot Status (`SLOT_STATUS`)
++| Enum Key | Value | Allowed Transitions | Description |
++| :--- | :--- | :--- | :--- |
++| `AVAILABLE` | `"AVAILABLE"` | `-> RESERVED`, `-> MAINTENANCE` | Free to be allocated to a new booking (`activeBookingId: null`, `reservedAt: null`). |
++| `RESERVED` | `"RESERVED"` | `-> OCCUPIED` *(on entry)*, `-> AVAILABLE` *(on cancellation, expiry, or orphan cleanup)* | Claimed by a `CONFIRMED` booking before vehicle entry (`activeBookingId` set). |
++| `OCCUPIED` | `"OCCUPIED"` | `-> AVAILABLE` *(on exit)* | Vehicle has passed entry verification (`ACTIVE` booking, `activeBookingId` set). |
++| `MAINTENANCE` | `"MAINTENANCE"` | `-> AVAILABLE` | Temporarily taken out of service by `MALL_OWNER`; cannot be allocated. |
++
++*(Note: Physical soft-deactivation is controlled by `isActive: Boolean` on `ParkingSlot` in addition to operational `status`.)*
++
++### 2.5 Booking Status (`BOOKING_STATUS`) & Billing Status (`BILLING_STATUS`)
++| Enum Key | Value | Allowed Transitions | Description |
++| :--- | :--- | :--- | :--- |
++| `CONFIRMED` | `"CONFIRMED"` | `-> ACTIVE`, `-> CANCELLED`, `-> EXPIRED` | Slot reserved; awaiting vehicle arrival and QR entry scan before `expiresAt`. **(Counts as Active Booking)** |
++| `ACTIVE` | `"ACTIVE"` | `-> COMPLETED` | Vehicle entered mall; timer running. **(Counts as Active Booking)** |
++| `COMPLETED` | `"COMPLETED"` | *(Terminal)* | Vehicle exited mall; duration and bill generated; slot released. |
++| `CANCELLED` | `"CANCELLED"` | *(Terminal)* | Cancelled by user prior to gate entry; slot released. |
++| `EXPIRED` | `"EXPIRED"` | *(Terminal)* | Unclaimed booking expired after `expiresAt` prior to entry; slot released. |
++
++- **`BILLING_STATUS`**:
++  - `PENDING` (`"PENDING"`) — Default while booking is `CONFIRMED` or `ACTIVE`.
++  - `GENERATED` (`"GENERATED"`) — Final bill calculated upon transition to `COMPLETED`.
++  - `WAIVED` (`"WAIVED"`) — Set when booking ends in `CANCELLED` or `EXPIRED` with zero charge.
++
++### 2.6 QR Token Status (`QR_TOKEN_STATUS`)
++| Enum Key | Value | Allowed Transitions | Description |
++| :--- | :--- | :--- | :--- |
++| `ACTIVE` | `"ACTIVE"` | `-> CONSUMED`, `-> REVOKED`, `-> EXPIRED` | Valid for gate verification (entry when booking is `CONFIRMED`, exit when `ACTIVE`). |
++| `CONSUMED` | `"CONSUMED"` | *(Terminal)* | Both entry and exit scans completed; cannot be reused. |
++| `REVOKED` | `"REVOKED"` | *(Terminal)* | Invalidated due to booking cancellation. |
++| `EXPIRED` | `"EXPIRED"` | *(Terminal)* | Invalidated due to booking expiry. |
++
++---
++
++## 3. Detailed Entity Specifications
++
++### 3.1 `User` (`server/src/models/User.js`)
++
++Represents all registered platform actors.
++
++| Field | Mongoose Type | Required | Default | Constraints / Notes |
++| :--- | :--- | :--- | :--- | :--- |
++| `_id` | `ObjectId` | Auto | Auto | Primary key. |
++| `name` | `String` | Yes | — | `trim: true`, `minlength: 2`, `maxlength: 100`. |
++| `email` | `String` | Yes | — | `unique: true`, `lowercase: true`, `trim: true`, email regex validation. |
++| `passwordHash` | `String` | Yes | — | `select: false` (never returned in queries unless explicitly selected). Bcrypt hash. |
++| `phone` | `String` | No | `null` | `trim: true`, `maxlength: 20`. |
++| `role` | `String` | Yes | `"USER"` | `enum: Object.values(ROLES)`. Immutable via self-profile updates. |
++| `status` | `String` | Yes | `"ACTIVE"` | `enum: Object.values(USER_STATUS)`. Set to `"PENDING_APPROVAL"` when `role === "MALL_OWNER"`. |
++| `approvedBy` | `ObjectId` (`ref: "User"`) | No | `null` | Admin who approved/rejected a `MALL_OWNER` account. |
++| `approvedAt` | `Date` | No | `null` | Timestamp of Admin approval decision. |
++| `rejectionReason` | `String` | No | `null` | Optional reason recorded if Admin rejects `MALL_OWNER`. |
++| `createdBy` | `ObjectId` (`ref: "User"`) | No | `null` | Set when a `MALL_OWNER` or `ADMIN` provisions a `GUARD` account. |
++| `createdAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
++| `updatedAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
++
++**Indexes on `User`:**
++1. `{ email: 1 }` — `unique: true` (fast login lookup and duplicate email prevention).
++2. `{ role: 1, status: 1 }` — Compound index for Admin filtering of pending `MALL_OWNER` accounts (`role: "MALL_OWNER", status: "PENDING_APPROVAL"`).
++
++---
++
++### 3.2 `RefreshToken` (`server/src/models/RefreshToken.js`)
++
++Stores **only SHA-256 hashes** of refresh tokens (delivered to clients via `HttpOnly` cookies) to support stateful token rotation, reuse/theft detection, and explicit logout. Raw refresh tokens are never persisted in MongoDB.
++
++| Field | Mongoose Type | Required | Default | Constraints / Notes |
++| :--- | :--- | :--- | :--- | :--- |
++| `_id` | `ObjectId` | Auto | Auto | Primary key. |
++| `userId` | `ObjectId` (`ref: "User"`) | Yes | — | Owner of the session. |
++| `tokenHash` | `String` | Yes | — | `unique: true`. SHA-256 hex digest of the raw `HttpOnly` cookie token. |
++| `familyId` | `String` | Yes | — | UUID grouping a single login session's rotation chain for reuse detection. |
++| `expiresAt` | `Date` | Yes | — | Expiration timestamp (e.g., 7 days from creation). |
++| `revokedAt` | `Date` | No | `null` | Set when rotated or explicitly logged out. |
++| `replacedByTokenHash` | `String` | No | `null` | Points to the new `tokenHash` issued during rotation. |
++| `createdByIp` | `String` | No | `null` | Audit metadata. |
++| `userAgent` | `String` | No | `null` | Audit metadata. |
++| `createdAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
++| `updatedAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
++
++**Indexes on `RefreshToken`:**
++1. `{ tokenHash: 1 }` — `unique: true` (O(1) verification during `POST /api/auth/refresh` and `POST /api/auth/logout`).
++2. `{ familyId: 1 }` — Fast revocation of an entire rotation chain if refresh token reuse is detected.
++3. `{ userId: 1, revokedAt: 1 }` — Fast lookup/revocation of all active sessions for a user (e.g., on password change or account suspension).
++4. `{ expiresAt: 1 }` — TTL index (`expireAfterSeconds: 0`) so MongoDB automatically purges expired refresh token documents.
++
++---
++
++### 3.3 `Mall` (`server/src/models/Mall.js`)
++
++Represents a physical shopping mall managed by an approved `MALL_OWNER`.
++
++| Field | Mongoose Type | Required | Default | Constraints / Notes |
++| :--- | :--- | :--- | :--- | :--- |
++| `_id` | `ObjectId` | Auto | Auto | Primary key. |
++| `ownerId` | `ObjectId` (`ref: "User"`) | Yes | — | Must reference a `User` with `role: "MALL_OWNER"` and `status: "ACTIVE"`. |
++| `name` | `String` | Yes | — | `trim: true`, `minlength: 2`, `maxlength: 120`. |
++| `address` | `String` | Yes | — | Full street address (`trim: true`, `maxlength: 250`). |
++| `city` | `String` | Yes | — | `trim: true`, `maxlength: 80`. |
++| `description` | `String` | No | `""` | `maxlength: 500`. |
++| `hourlyRate` | `Number` | Yes | — | `min: 0`, `max: 10000`. Currency rate per hour (in INR / base currency units). |
++| `openingTime` | `String` | No | `"08:00"` | `HH:mm` 24-hour format. |
++| `closingTime` | `String` | No | `"23:00"` | `HH:mm` 24-hour format. |
++| `status` | `String` | Yes | `"PENDING"` | `enum: Object.values(MALL_STATUS)`. Starts as `"PENDING"`. |
++| `approvedBy` | `ObjectId` (`ref: "User"`) | No | `null` | Admin who approved/rejected the mall. |
++| `approvedAt` | `Date` | No | `null` | Timestamp of Admin approval. |
++| `rejectionReason` | `String` | No | `null` | Reason provided if Admin sets `status: "REJECTED"`. |
++| `totalSlots` | `Number` | Yes | `0` | `min: 0`. Informational counter or derived count of active slots. |
++| `createdAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
++| `updatedAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
++
++**Indexes on `Mall`:**
++1. `{ status: 1, city: 1 }` — Optimizes public mall discovery queries (`status: "APPROVED"` filtered by `city`).
++2. `{ ownerId: 1, status: 1 }` — Optimizes Mall Owner dashboard queries.
++3. `{ name: 1, city: 1, address: 1 }` — `unique: true` (prevents duplicate submissions of the exact same mall name and address in the same city).
++
++---
++
++### 3.4 `GuardAssignment` (`server/src/models/GuardAssignment.js`)
++
++Authorizes a `GUARD` user to verify QR tokens and process gate entry/exit for a specific `Mall`.
++
++| Field | Mongoose Type | Required | Default | Constraints / Notes |
++| :--- | :--- | :--- | :--- | :--- |
++| `_id` | `ObjectId` | Auto | Auto | Primary key. |
++| `guardId` | `ObjectId` (`ref: "User"`) | Yes | — | Must reference a `User` with `role: "GUARD"`. |
++| `mallId` | `ObjectId` (`ref: "Mall"`) | Yes | — | Target mall where the guard operates. |
++| `assignedBy` | `ObjectId` (`ref: "User"`) | Yes | — | `MALL_OWNER` (of `mallId`) or `ADMIN` who created the assignment. |
++| `gateLabel` | `String` | No | `"Main Gate"` | Optional operational label (e.g., `"North Entry"`, `"Basement B1"`). |
++| `isActive` | `Boolean` | Yes | `true` | Allows deactivating a guard's mall access without deleting historical audit records. |
++| `deactivatedAt` | `Date` | No | `null` | Timestamp when assignment was revoked. |
++| `createdAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
++| `updatedAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
++
++**Indexes on `GuardAssignment`:**
++1. `{ guardId: 1, mallId: 1 }` — `unique: true` (prevents duplicate assignment rows for the same guard and mall; reactivating updates `isActive: true`).
++2. `{ guardId: 1, isActive: 1 }` — Compound index for fast middleware authorization lookup (`GuardAssignment.findOne({ guardId, mallId, isActive: true })`).
++3. `{ mallId: 1, isActive: 1 }` — Lists all active guards assigned to a specific mall for the Mall Owner dashboard.
++
++---
++
++### 3.5 `ParkingSlot` (`server/src/models/ParkingSlot.js`)
++
++Represents an individual physical parking bay within a `Mall`, including correlation metadata (`activeBookingId`, `reservedAt`) for safe conditional rollback and orphan recovery.
++
++| Field | Mongoose Type | Required | Default | Constraints / Notes |
++| :--- | :--- | :--- | :--- | :--- |
++| `_id` | `ObjectId` | Auto | Auto | Primary key. |
++| `mallId` | `ObjectId` (`ref: "Mall"`) | Yes | — | Parent mall. |
++| `slotNumber` | `String` | Yes | — | `trim: true`, `uppercase: true`, `maxlength: 20` (e.g., `"A-01"`, `"B2-104"`). |
++| `floor` | `String` | No | `"G"` | Floor or level identifier (e.g., `"G"`, `"B1"`, `"B2"`). |
++| `zone` | `String` | No | `"General"` | Zone label (e.g., `"Zone A"`, `"Near Elevator"`). |
++| `vehicleType` | `String` | Yes | `"CAR"` | `enum: ["CAR", "BIKE", "EV"]`. |
++| `status` | `String` | Yes | `"AVAILABLE"` | `enum: Object.values(SLOT_STATUS)` (`AVAILABLE`, `RESERVED`, `OCCUPIED`, `MAINTENANCE`). |
++| `activeBookingId` | `ObjectId` (`ref: "Booking"`) | No | `null` | Pre-generated `_id` of the booking that claimed this slot. Used to guard rollbacks, cancellations, and orphan cleanup so a slot allocated to another booking is never accidentally released. |
++| `reservedAt` | `Date` | No | `null` | Timestamp when slot transitioned `AVAILABLE -> RESERVED`. Used by `reconcileStaleReservations` to identify orphaned reservations. |
++| `isActive` | `Boolean` | Yes | `true` | Soft-deactivation flag (`false` means slot is decommissioned and cannot be booked). |
++| `createdAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
++| `updatedAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
++
++**Indexes on `ParkingSlot`:**
++1. `{ mallId: 1, slotNumber: 1 }` — **`unique: true`**. Strictly prevents duplicate slot numbers within the same mall while allowing different malls to both have `"A-01"`.
++2. `{ mallId: 1, isActive: 1, status: 1, vehicleType: 1, slotNumber: 1 }` — Compound index supporting both real-time availability counts and the atomic allocation query (`findOneAndUpdate({ mallId, isActive: true, status: "AVAILABLE" }, ..., { sort: { slotNumber: 1 } })`).
++3. `{ status: 1, reservedAt: 1 }` — Supports the periodic/lazy orphan reconciliation scan (`{ status: "RESERVED", reservedAt: { $lte: cutoff } }`).
++
++---
++
++### 3.6 `Booking` (`server/src/models/Booking.js`)
++
++Tracks a user's reservation from confirmation through entry, exit, and billing.
++
++| Field | Mongoose Type | Required | Default | Constraints / Notes |
++| :--- | :--- | :--- | :--- | :--- |
++| `_id` | `ObjectId` | Auto | Auto | Primary key (pre-generated prior to atomic slot reservation). |
++| `bookingCode` | `String` | Yes | — | `unique: true`, human-readable reference (e.g., `"PK-20261116-8F3A"`). |
++| `userId` | `ObjectId` (`ref: "User"`) | Yes | — | Customer who created the booking (`role: "USER"`). |
++| `mallId` | `ObjectId` (`ref: "Mall"`) | Yes | — | Target mall (`status: "APPROVED"` at booking time). |
++| `slotId` | `ObjectId` (`ref: "ParkingSlot"`) | Yes | — | Allocated parking slot. |
++| `vehicleNumber` | `String` | Yes | — | `trim: true`, `uppercase: true`, `minlength: 4`, `maxlength: 20`. |
++| `vehicleType` | `String` | Yes | `"CAR"` | `enum: ["CAR", "BIKE", "EV"]`. |
++| `status` | `String` | Yes | `"CONFIRMED"` | `enum: Object.values(BOOKING_STATUS)` (`CONFIRMED`, `ACTIVE`, `COMPLETED`, `CANCELLED`, `EXPIRED`). |
++| `reservedAt` | `Date` | Yes | `Date.now` | Server timestamp when booking was created. |
++| `expiresAt` | `Date` | Yes | — | Unclaimed reservation expiry deadline (e.g., `reservedAt + 60 minutes`). If the vehicle has not entered by `expiresAt`, the booking can be transitioned `CONFIRMED -> EXPIRED` and its slot released. |
++| `entryTime` | `Date` | No | `null` | Server timestamp set when Guard processes gate entry. |
++| `exitTime` | `Date` | No | `null` | Server timestamp set when Guard processes gate exit. |
++| `cancelledAt` | `Date` | No | `null` | Server timestamp set when User cancels a `CONFIRMED` booking. |
++| `expiredAt` | `Date` | No | `null` | Server timestamp set when a `CONFIRMED` booking is marked `EXPIRED`. |
++| `entryGuardId` | `ObjectId` (`ref: "User"`) | No | `null` | Guard who verified entry. |
++| `exitGuardId` | `ObjectId` (`ref: "User"`) | No | `null` | Guard who verified exit. |
++| `hourlyRateSnapshot` | `Number` | Yes | — | `min: 0`. Snapshot of `Mall.hourlyRate` at reservation time (prevents mid-booking rate changes from altering active bills). |
++| `durationMinutes` | `Number` | No | `null` | Calculated on exit: `Math.max(1, Math.ceil((exitTime - entryTime) / 60000))`. *(Provisional policy — see Section 6)* |
++| `billableHours` | `Number` | No | `null` | Calculated on exit: `Math.max(1, Math.ceil(durationMinutes / 60))` (provisional minimum 1-hour charge, ceiling rounding). |
++| `calculatedAmount` | `Number` | No | `null` | Calculated on exit: `billableHours * hourlyRateSnapshot`. |
++| `billingStatus` | `String` | Yes | `"PENDING"` | `enum: Object.values(BILLING_STATUS)` (`PENDING`, `GENERATED`, `WAIVED`). |
++| `createdAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
++| `updatedAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
++
++**Indexes on `Booking`:**
++1. **One Active Booking Per User Constraint (Partial Unique Index):**
++   ```js
++   bookingSchema.index(
++     { userId: 1 },
++     {
++       unique: true,
++       partialFilterExpression: { status: { $in: ["CONFIRMED", "ACTIVE"] } },
++       name: "unique_active_booking_per_user",
++     }
++   );
++   ```
++2. **One Active Booking Per Slot Constraint (Partial Unique Index):**
++   ```js
++   bookingSchema.index(
++     { slotId: 1 },
++     {
++       unique: true,
++       partialFilterExpression: { status: { $in: ["CONFIRMED", "ACTIVE"] } },
++       name: "unique_active_booking_per_slot",
++     }
++   );
++   ```
++3. `{ bookingCode: 1 }` — `unique: true` (lookup by human-readable booking code).
++4. `{ status: 1, expiresAt: 1 }` — Optimizes expired reservation sweep (`{ status: "CONFIRMED", expiresAt: { $lte: now } }`).
++5. `{ userId: 1, createdAt: -1 }` — User booking history sorted newest first.
++6. `{ mallId: 1, status: 1, createdAt: -1 }` — Mall Owner & Admin operational and analytics queries.
++
++---
++
++### 3.7 `QRToken` (`server/src/models/QRToken.js`)
++
++Stores cryptographic verification state for a booking's QR code so tokens can be verified, audited, and protected against replay attacks.
++
++| Field | Mongoose Type | Required | Default | Constraints / Notes |
++| :--- | :--- | :--- | :--- | :--- |
++| `_id` | `ObjectId` | Auto | Auto | Primary key. |
++| `bookingId` | `ObjectId` (`ref: "Booking"`) | Yes | — | `unique: true`. 1:1 relationship with `Booking`. |
++| `mallId` | `ObjectId` (`ref: "Mall"`) | Yes | — | Denormalized from `Booking.mallId` for single-query guard scope verification. |
++| `tokenHash` | `String` | Yes | — | `unique: true`. SHA-256 hash of the raw secret token embedded in the user's QR code. |
++| `status` | `String` | Yes | `"ACTIVE"` | `enum: Object.values(QR_TOKEN_STATUS)` (`ACTIVE`, `CONSUMED`, `REVOKED`, `EXPIRED`). |
++| `entryScannedAt` | `Date` | No | `null` | Populated on first valid entry scan; prevents duplicate entry replay. |
++| `entryScannedBy` | `ObjectId` (`ref: "User"`) | No | `null` | Guard who scanned at entry. |
++| `exitScannedAt` | `Date` | No | `null` | Populated on valid exit scan; transitions `status` to `"CONSUMED"`. |
++| `exitScannedBy` | `ObjectId` (`ref: "User"`) | No | `null` | Guard who scanned at exit. |
++| `expiresAt` | `Date` | Yes | — | Hard expiration timestamp. |
++| `createdAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
++| `updatedAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
++
++**Indexes on `QRToken`:**
++1. `{ tokenHash: 1 }` — `unique: true` (fast lookup during gate scan).
++2. `{ bookingId: 1 }` — `unique: true` (enforces 1:1 relationship with `Booking`).
++3. `{ mallId: 1, status: 1 }` — Operational queries per mall.
++
++---
++
++## 4. Constraint Matrix & Invariant Verification
++
++| Business Invariant | Database Mechanism | Application-Layer Mechanism | Error Response |
++| :--- | :--- | :--- | :--- |
++| **No duplicate slot numbers in the same mall** | Compound unique index on `ParkingSlot`: `{ mallId: 1, slotNumber: 1 }` (`unique: true`) + uppercase normalization. | Service checks or catches MongoDB `E11000` duplicate key error. | `409 Conflict` |
++| **At most one active booking per user** | Partial unique index on `Booking`: `{ userId: 1 }` with `partialFilterExpression: { status: { $in: ["CONFIRMED", "ACTIVE"] } }`. | Pre-check + catch `E11000` with correlation-guarded slot rollback (`activeBookingId`). | `409 Conflict` |
++| **At most one active booking per slot** | Conditional atomic `ParkingSlot.findOneAndUpdate({ status: "AVAILABLE", isActive: true }, { $set: { status: "RESERVED", activeBookingId: bookingId, reservedAt: now } })` **plus** partial unique index on `Booking`: `{ slotId: 1 }` where `status: { $in: ["CONFIRMED", "ACTIVE"] }`. | If no slot matches `AVAILABLE`, or if `E11000` triggers, perform correlation-guarded rollback and return conflict. | `409 Conflict` |
++| **Never release a slot allocated to another booking** | `ParkingSlot.activeBookingId` stores the pre-generated `Booking._id`. | Rollback, cancellation, expiry, and orphan cleanup updates all require `{ _id: slotId, status: "RESERVED", activeBookingId: expectedBookingId }`. | Safe no-op if `activeBookingId` no longer matches |
++| **Prevent invalid guard-to-mall access** | Compound unique index on `GuardAssignment`: `{ guardId: 1, mallId: 1 }` + `{ guardId: 1, isActive: 1 }`. | Middleware/Service verifies `GuardAssignment.exists({ guardId: req.user.id, mallId: booking.mallId, isActive: true })`. | `403 Forbidden` |
++| **Prevent QR replay on entry or exit** | `QRToken.status` (`ACTIVE -> CONSUMED`) + `entryScannedAt` / `exitScannedAt` + atomic `Booking.findOneAndUpdate({ _id, status: expectedStatus })`. | Entry requires `Booking.status === "CONFIRMED"` and `QRToken.entryScannedAt === null`. Exit requires `Booking.status === "ACTIVE"` and `QRToken.status === "ACTIVE"`. | `409 Conflict` |
++
++---
++
++## 5. MongoDB Consistency, Partial Unique Index Verification & Recovery Strategy
++
++### 5.1 Verification of Partial Unique Index Support in MongoDB
++- `server/package.json` uses **Mongoose `^8.19.2`** (which depends on the official MongoDB Node.js Driver v6.x and officially targets **MongoDB Server 6.0, 7.0, and 8.0**).
++- In MongoDB Server **3.2+**, `partialFilterExpression` is supported on unique indexes, and since **MongoDB 5.0+ / 6.0+**, the `$in` operator is natively supported inside `partialFilterExpression` (e.g., `partialFilterExpression: { status: { $in: ["CONFIRMED", "ACTIVE"] } }`).
++- **How it works:** MongoDB only indexes `Booking` documents whose `status` field is `"CONFIRMED"` or `"ACTIVE"`. Historical documents with `status: "COMPLETED"`, `"CANCELLED"`, or `"EXPIRED"` are excluded from the partial index, allowing the same `userId` and `slotId` to have unlimited historical bookings while strictly forbidding two simultaneous active bookings at the storage engine level.
++
++### 5.2 Multi-Step Failure Scenario & Why Compensating Rollback Alone Is Insufficient
++Without multi-document transactions (which are unavailable on a default standalone local `mongod`), creating a booking spans three documents (`ParkingSlot`, `Booking`, `QRToken`):
++1. `ParkingSlot.findOneAndUpdate()` succeeds (`status: "AVAILABLE" -> "RESERVED"`, `activeBookingId: bookingId`, `reservedAt: now`).
++2. `Booking.create({ _id: bookingId, ... })` fails **and** the compensating rollback fails (e.g., MongoDB network drop), **OR** the Node.js server process crashes (`SIGKILL` / power failure) before `Booking.create()` runs.
++3. **Outcome:** The `ParkingSlot` document remains in `status: "RESERVED"` with `activeBookingId: bookingId`, even though no `Booking` document with `_id: bookingId` exists.
++
++### 5.3 Four-Part Recovery & Safety Protocol
++1. **Correlation-Guarded Rollback (`activeBookingId`):**
++   - Every immediate rollback in `try / catch` filters on `{ _id: slotId, status: "RESERVED", activeBookingId: bookingId }`. It is impossible for a delayed error handler to reset a slot that has subsequently been assigned to a different booking.
++2. **Orphaned Slot Reconciliation (`reconcileStaleReservations`):**
++   - Finds any `ParkingSlot` where `status === "RESERVED"` and `reservedAt <= now - ORPHAN_GRACE_MS` (default `60 seconds`).
++   - Checks if a `Booking` with `_id: slot.activeBookingId` exists in `["CONFIRMED", "ACTIVE"]` status.
++   - If no such active booking exists, atomically resets the slot using `{ _id: slot._id, status: "RESERVED", activeBookingId: slot.activeBookingId } -> { $set: { status: "AVAILABLE", activeBookingId: null, reservedAt: null } }`.
++3. **Unclaimed Reservation Expiry (`expireOverdueBookings`):**
++   - Finds any `Booking` where `status === "CONFIRMED"` and `expiresAt <= now`.
++   - Transitions the booking to `status: "EXPIRED"`, `billingStatus: "WAIVED"`, transitions its `QRToken` to `EXPIRED`, and releases its `ParkingSlot` using the correlation filter `{ _id: booking.slotId, status: "RESERVED", activeBookingId: booking._id }`.
++4. **Upgrade Path to MongoDB Replica-Set Transactions:**
++   - Because standalone `findOneAndUpdate` + reconciliation provides **eventual recovery** (up to `ORPHAN_GRACE_MS` after a hard process crash) rather than instantaneous multi-document rollback on process crash, deployments running on MongoDB Atlas or a local replica set (`rs.initiate()`) can optionally enable `MONGODB_USE_TRANSACTIONS=true` to wrap `ParkingSlot`, `Booking`, and `QRToken` writes in a single ACID session while keeping all conditional filters and partial unique indexes intact.
++
++---
++
++## 6. Provisional Billing Policy Notice
++
++The billing fields on `Booking` (`durationMinutes`, `billableHours`, `calculatedAmount`) use the following **provisional MVP default**:
++- Minimum charge of **1 hour** (`billableHours >= 1`).
++- Ceiling-based partial-hour rounding (`billableHours = Math.max(1, Math.ceil(durationMinutes / 60))`).
++- Rate locked to `hourlyRateSnapshot` captured when the booking was created.
++
++> **Important:** This billing formula is a **provisional product decision** and must be explicitly confirmed before Milestone 4 (QR, Entry/Exit & Billing) implementation begins.
+diff --git a/docs/DEVELOPMENT_GUIDELINES.md b/docs/DEVELOPMENT_GUIDELINES.md
+new file mode 100644
+index 0000000..595aa8e
+--- /dev/null
++++ b/docs/DEVELOPMENT_GUIDELINES.md
+@@ -0,0 +1,203 @@
++# ParkEase — Development Guidelines & Conventions (`docs/DEVELOPMENT_GUIDELINES.md`)
++
++> **Document Status:** Milestone 0 Engineering Standards (Revised)  
++> **Scope:** Solo Developer Workflow, Naming Conventions, Layer Responsibilities, Cookie/CSRF Security, Error Handling, Validation, Logging, and Testing
++
++---
++
++## 1. Guiding Principles for Solo Development
++
++ParkEase was initially scaffolded with a 4-person team template (`CONTRIBUTING.md`), and is now developed independently. These guidelines streamline the workflow so that solo development remains disciplined, low-friction, and production-grade without unnecessary ceremony:
++1. **Contract-First Execution:** Implement each milestone according to `docs/DATABASE_DESIGN.md` and `docs/API_CONTRACTS.md`.
++2. **Preserve Existing Architecture:** Keep the npm workspace structure (`client` and `server`), plain JavaScript ES modules (`"type": "module"`), Express 5, Mongoose 8, React 19, and Node's built-in test runner (`node:test`).
++3. **Avoid Enterprise Bloat:** Do not introduce TypeScript migrations, Redux, class-based dependency injection containers, or heavy ORM abstractions. Keep functions pure, direct, and easy to trace.
++
++---
++
++## 2. File & Folder Naming Conventions
++
++### 2.1 Backend (`server/src/`)
++| Directory | Naming Convention | Examples |
++| :--- | :--- | :--- |
++| `config/` | `camelCase.js` | `db.js`, `env.js` |
++| `constants/` | `camelCase.js` (exports `UPPER_SNAKE_CASE` objects) | `roles.js`, `statuses.js` |
++| `models/` | `PascalCase.js` (singular entity name) | `User.js`, `Mall.js`, `ParkingSlot.js`, `Booking.js`, `GuardAssignment.js`, `RefreshToken.js`, `QRToken.js` |
++| `routes/` | `<resource>Routes.js` + `index.js` | `healthRoutes.js`, `authRoutes.js`, `mallRoutes.js`, `bookingRoutes.js`, `adminRoutes.js` |
++| `controllers/` | `<resource>Controller.js` (exports named verbs) | `healthController.js`, `authController.js`, `mallController.js` |
++| `services/` | `<resource>Service.js` (exports named domain functions) | `authService.js`, `mallService.js`, `bookingService.js`, `qrService.js`, `billingService.js` |
++| `middleware/` | `camelCase.js` | `errorHandler.js`, `notFound.js`, `authMiddleware.js`, `csrfMiddleware.js`, `rateLimiter.js` |
++| `utils/` | `camelCase.js` (or `PascalCase.js` for error classes) | `AppError.js`, `jwt.js`, `cookies.js`, `password.js`, `validators.js` |
++| `scripts/` | `camelCase.js` | `seedAdmin.js` |
++| `server/test/` | `<feature>.test.js` | `app.test.js`, `auth.test.js`, `booking.test.js` |
++
++### 2.2 Frontend (`client/src/`)
++| Directory | Naming Convention | Examples |
++| :--- | :--- | :--- |
++| `components/` | `PascalCase.jsx` | `Navbar.jsx`, `Footer.jsx`, `FeatureCard.jsx`, `PageContainer.jsx`, `ProtectedRoute.jsx` |
++| `pages/` | `<Name>Page.jsx` (grouped by role subfolder as pages grow) | `HomePage.jsx`, `LoginPage.jsx`, `RegisterPage.jsx`, `DashboardPage.jsx`, `NotFoundPage.jsx` |
++| `context/` | `<Name>Context.jsx` | `AuthContext.jsx` |
++| `hooks/` | `use<Name>.js` | `useAuth.js` |
++| `services/` | `<resource>Service.js` (`api.js` as core HTTP client) | `api.js`, `authService.js`, `mallService.js`, `bookingService.js` |
++| `utils/` | `camelCase.js` | `constants.js`, `formatters.js` |
++
++---
++
++## 3. Layer Responsibilities (Backend)
++
++### 3.1 Routes (`server/src/routes/`)
++- Mounts HTTP verbs (`GET`, `POST`, `PATCH`, `DELETE`) onto an Express `Router()`.
++- Chains authentication, RBAC (`authorize`), CSRF origin/header verification (`verifyCsrfProtection`), and rate-limiting middleware before the controller function.
++- **Never** contains inline route handler callbacks with business logic.
++
++### 3.2 Controllers (`server/src/controllers/`)
++- Reads HTTP inputs (`req.params`, `req.query`, `req.body`, `req.user`, `req.headers.cookie`, `req.ip`).
++- Calls the appropriate `Service` function.
++- Manages HTTP-specific transport concerns such as setting or clearing the `HttpOnly` refresh token cookie (`res.cookie` / `res.clearCookie`).
++- Formats and sends the HTTP response (`res.status(code).json({ success: true, message, data })`).
++- **Rely on Express 5 automatic async error forwarding:** All async controller functions simply `await` service calls and allow thrown `AppError` instances to propagate to `errorHandler.js` without repetitive `try/catch` boilerplate.
++
++### 3.3 Services (`server/src/services/`)
++- Owns all business rules, state transition validations, conditional atomic updates (`findOneAndUpdate`), correlation-guarded rollbacks, orphan reconciliation, and Mongoose queries.
++- Throws `new AppError(status, message, code, details)` when a domain rule, permission check, or state constraint is violated.
++- **Never** accesses Express `req` or `res` objects directly.
++
++### 3.4 Models (`server/src/models/`)
++- Defines Mongoose schemas, field constraints, enums, and compound/partial indexes.
++- Model names use singular `PascalCase`: `mongoose.model("User", userSchema)`, `mongoose.model("ParkingSlot", parkingSlotSchema)`.
++
++---
++
++## 4. Token, Cookie & CSRF Conventions
++
++1. **No Token Storage in `localStorage` or `sessionStorage`:**
++   - The frontend must store `accessToken` **only in React memory** (`AuthContext` / module variable in `client/src/services/api.js`).
++   - The refresh token must be stored **only in an `HttpOnly` cookie** (`parkease_refresh_token`) managed by the server.
++2. **Cookie Settings (`server/src/utils/cookies.js`):**
++   - Always set `httpOnly: true`, `path: "/api/auth"`, `maxAge: 7 * 24 * 60 * 60 * 1000`.
++   - In development/test (`process.env.NODE_ENV !== "production"`): `secure: false`, `sameSite: "lax"`.
++   - In production (`process.env.NODE_ENV === "production"`): `secure: true`, `sameSite: "strict"`.
++3. **CSRF Protection on Cookie-Authenticated Endpoints:**
++   - `POST /api/auth/refresh` and `POST /api/auth/logout` must validate:
++     - `req.headers.origin` (when present) matches `process.env.CLIENT_URL || "http://localhost:5173"`.
++     - `req.headers["x-requested-with"] === "XMLHttpRequest"`.
++
++---
++
++## 5. Error Handling Convention
++
++### 5.1 Operational Errors (`AppError`)
++In Milestone 1, create `server/src/utils/AppError.js`:
++```js
++export default class AppError extends Error {
++  constructor(status, message, code = "APP_ERROR", details = undefined) {
++    super(message);
++    this.name = "AppError";
++    this.status = status;
++    this.code = code;
++    this.details = details;
++    this.isOperational = true;
++  }
++}
++```
++
++### 5.2 Centralized Error Handler (`server/src/middleware/errorHandler.js`)
++The error handler must follow these exact rules so existing tests in `server/test/app.test.js` continue to pass while supporting rich domain errors:
++1. **Headers Already Sent:** `if (res.headersSent) return next(err);`
++2. **Malformed JSON (`SyntaxError` from `express.json()`):** When `err.status === 400 && !err.isOperational`, return `400` with `{ success: false, message: "Invalid request body" }`.
++3. **Payload Too Large (`413` from `express.json()`):** Return `413` with `{ success: false, message: "Request body too large" }`.
++4. **Operational Errors (`err.isOperational === true`):** Return `err.status` (`400..499`) with `{ success: false, message: err.message, ...(err.code && { error: { code: err.code, ...(err.details && { details: err.details }) } }) }`.
++5. **Mongoose Duplicate Key (`err.code === 11000`):** Map to `409 Conflict` with a safe conflict message.
++6. **Mongoose CastError / ValidationError:** Map to `400 Bad Request` with a safe validation message.
++7. **Unexpected / Programming Errors (`500`):** Never leak `err.message` or stack trace to the client. Always return `500` with `{ success: false, message: "Something went wrong" }`.
++
++---
++
++## 6. Input Validation Convention
++
++To avoid unnecessary third-party bloat while keeping validation strict:
++- Use focused, reusable validator helpers in `server/src/utils/validators.js` (or lightweight middleware):
++  - Validate `mongoose.Types.ObjectId.isValid(id)` on all `:id` route parameters before querying MongoDB.
++  - Normalize and trim strings (`email.trim().toLowerCase()`, `slotNumber.trim().toUpperCase()`, `vehicleNumber.trim().toUpperCase()`).
++  - Explicitly whitelist allowed fields from `req.body` (never pass raw `req.body` directly into `Model.create(req.body)` or `Model.findByIdAndUpdate(id, req.body)` — this prevents mass-assignment vulnerabilities).
++
++---
++
++## 7. Environment Variables & Configuration
++
++### 7.1 Backend (`server/.env` & `server/.env.example`)
++All backend secrets and runtime settings live in `server/.env`:
++```dotenv
++PORT=5000
++NODE_ENV=development
++MONGODB_URI=mongodb://127.0.0.1:27017/parkease
++CLIENT_URL=http://localhost:5173
++JWT_ACCESS_SECRET=replace-with-a-strong-random-secret
++JWT_ACCESS_EXPIRES_IN=15m
++JWT_REFRESH_EXPIRES_IN=7d
++BCRYPT_SALT_ROUNDS=10
++ADMIN_NAME=ParkEase Admin
++ADMIN_EMAIL=admin@parkease.local
++ADMIN_PASSWORD=replace-with-a-strong-password
++QR_TOKEN_SECRET=replace-with-distinct-32-byte-random-hex-secret
++```
++- Validate required environment variables at startup (`server/src/config/`).
++- Never print raw environment values in console logs or error messages.
++
++### 7.2 Frontend (`client/.env` & `client/.env.example`)
++```dotenv
++VITE_API_URL=http://localhost:5000/api
++```
++- **Strict Rule:** `VITE_*` variables are bundled into public browser JavaScript. Never place any secret or private key in `client/.env`.
++
++---
++
++## 8. Logging Standards
++
++- Keep logging clean and structured using standard `console.info`, `console.warn`, and `console.error` (no heavy logging framework required for MVP).
++- **Redaction Rule:** Never log:
++  - `MONGODB_URI` or database connection strings containing credentials.
++  - `req.headers.authorization`, `req.headers.cookie`, `Set-Cookie` headers, or raw JWT / Refresh / QR tokens.
++  - Plaintext passwords (`password`, `ADMIN_PASSWORD`) or `passwordHash` values.
++- During `NODE_ENV === "test"`, suppress noisy expected error logs so `npm test` output stays clean.
++
++---
++
++## 9. Testing Standards
++
++- **Test Runner:** Node.js built-in test runner (`node --test` via `npm test`).
++- **Assertions:** `node:assert/strict`.
++- **HTTP Testing Pattern:** Start `app.listen(0, "127.0.0.1")` on an ephemeral port and make real HTTP calls using Node's global `fetch()`, closing the server in a `finally` block (matching `server/test/app.test.js`).
++- **Concurrency & Recovery Tests:** When testing booking allocation (Milestone 3), explicitly test:
++  - `Promise.all()` concurrent requests racing for a single `AVAILABLE` slot.
++  - `Promise.all()` concurrent requests from a single user attempting to create two active bookings.
++  - Correlation-guarded rollback (`activeBookingId`) ensuring a failed booking cannot release a slot already reassigned to another booking.
++  - Orphaned slot reconciliation (`reconcileStaleReservations`) recovering a slot left in `RESERVED` state without a matching active booking.
++- **Lint & Build Gate:** Before every commit, run from the repository root:
++  ```bash
++  npm run lint
++  npm run build
++  npm test
++  ```
++- **ESLint Rule Reminder:** `eslint.config.mjs` enforces `"no-unused-vars": ["error", { varsIgnorePattern: "^[A-Z]" }]`. Do not leave unused lowercase variables or parameters.
++
++---
++
++## 10. Practical Git Workflow (Solo Developer)
++
++### 10.1 Branching Strategy
++- `main` is the stable, runnable branch where every commit passes `npm run lint`, `npm run build`, and `npm test`.
++- Develop each milestone or feature slice on a focused branch:
++  - `docs/milestone-0-architecture-audit`
++  - `feat/m1-auth-rbac`
++  - `feat/m2-malls-and-slots`
++  - `feat/m3-atomic-bookings`
++  - `feat/m4-qr-entry-exit-billing`
++  - `feat/m5-dashboards-analytics`
++
++### 10.2 Commit Convention (Conventional Commits)
++Format: `<type>(<scope>): <imperative summary>`
++- `docs(arch): add Milestone 0 architecture and database design specs`
++- `feat(auth): implement user model, JWT auth, HttpOnly refresh cookie, and RBAC`
++- `feat(malls): add mall submission, admin approval, and slot inventory APIs`
++- `feat(bookings): implement conditional slot allocation, partial indexes, and orphan recovery`
++- `test(auth): add integration tests for registration, cookie rotation, and role guards`
+diff --git a/docs/MILESTONE_1_PLAN.md b/docs/MILESTONE_1_PLAN.md
+new file mode 100644
+index 0000000..c4b1414
+--- /dev/null
++++ b/docs/MILESTONE_1_PLAN.md
+@@ -0,0 +1,219 @@
++# ParkEase — Milestone 1 Implementation Plan: Authentication & RBAC (`docs/MILESTONE_1_PLAN.md`)
++
++> **Document Status:** Ready for Execution (Do Not Implement in Milestone 0)  
++> **Milestone Goal:** Deliver complete backend and frontend Authentication, In-Memory Access Tokens, `HttpOnly` Cookie Refresh Token Rotation with SHA-256 DB Hashing, Credentialed CORS + CSRF Protection, Role-Based Access Control (`USER`, `MALL_OWNER`, `GUARD`, `ADMIN`), Admin Bootstrap Script, Mall Owner Account Approval Workflow, and Automated Tests.
++
++---
++
++## 1. Scope & Product Rules for Milestone 1
++
++1. **Public Registration (`POST /api/auth/register`):**
++   - Allows registering as `USER` (`User.status = "ACTIVE"`) or `MALL_OWNER` (`User.status = "PENDING_APPROVAL"`).
++   - Strictly forbids registering as `ADMIN` or `GUARD` (`400 Bad Request`).
++2. **Mall Owner Account Approval (`PATCH /api/admin/mall-owners/:userId/status`):**
++   - `MALL_OWNER` accounts require explicit `ADMIN` approval (`PENDING_APPROVAL -> ACTIVE` or `REJECTED`) before they are permitted to perform owner actions (verified via `requireApprovedOwner` middleware).
++   - While in `PENDING_APPROVAL`, a `MALL_OWNER` can log in and call `GET /api/auth/me` to see their pending status on the frontend dashboard, and can log out.
++3. **Guard Account Provisioning (Foundation in Milestone 1):**
++   - Guard accounts (`role: "GUARD"`, `status: "ACTIVE"`) cannot self-register.
++   - Milestone 1 establishes the `GUARD` role enforcement and user creation helper; full mall-bound guard provisioning (`GuardAssignment`) connects when the `Mall` model is introduced in Milestone 2.
++4. **In-Memory JWT Access Token + `HttpOnly` Cookie Refresh Token Strategy:**
++   - **Access Token:** Short-lived (`15m`) signed JWT containing `{ sub, role, status }`. Returned in the JSON response body (`data.accessToken`) and held **only in React memory** (`AuthContext` / `api.js`), never in `localStorage` or `sessionStorage`.
++   - **Refresh Token:** Long-lived (`7d`) random token sent **exclusively in an `HttpOnly` cookie** (`parkease_refresh_token`, `Path=/api/auth`, `SameSite=Lax` in dev / `Strict` in prod, `Secure` in prod) and persisted in MongoDB (`RefreshToken` collection) **only as a SHA-256 hash** (`tokenHash`).
++   - **Refresh Token Rotation:** Every successful `POST /api/auth/refresh` revokes the used `RefreshToken` record, issues a new `RefreshToken` in the same `familyId`, sets the rotated `HttpOnly` cookie, and returns a new `accessToken` in JSON. Presenting an already-revoked token triggers reuse detection and revokes the entire `familyId` chain.
++   - **Credentialed CORS & CSRF Protection:** `cors()` enables `credentials: true` for `CLIENT_URL`, and cookie-authenticated endpoints (`POST /api/auth/refresh`, `POST /api/auth/logout`) enforce `Origin` header matching and require `X-Requested-With: XMLHttpRequest`.
++5. **Environment-Based Admin Bootstrap Script (`server/src/scripts/seedAdmin.js`):**
++   - Provisions the initial `ADMIN` account idempotently and safely from environment variables without exposing any public admin creation endpoint.
++
++---
++
++## 2. Required Dependencies
++
++Currently installed in `server/package.json`: `express`, `mongoose`, `cors`, `dotenv`.
++
++### New Dependencies to Install in `server` Workspace (During Milestone 1)
++Run from the repository root when starting Milestone 1:
++```bash
++npm install bcryptjs jsonwebtoken --workspace server
++```
++
++| Package | Workspace | Technical Justification |
++| :--- | :--- | :--- |
++| `bcryptjs` | `server` | Pure JavaScript implementation of `bcrypt` password hashing with zero native C++ node-gyp compilation issues across macOS/Linux/Windows and Node 22+. |
++| `jsonwebtoken` | `server` | Industry-standard RFC 7519 JWT signing and verification (`HS256`) with built-in expiration (`exp`) and subject validation. |
++
++- **No other runtime dependencies are needed for Milestone 1:**
++  - SHA-256 refresh token hashing, random token generation (`crypto.randomBytes(32).toString("hex")`), and `familyId` UUID generation use Node.js 22's built-in `node:crypto` module.
++  - Cookie parsing and serialization use Express 5's built-in `res.cookie()` / `res.clearCookie()` and a 12-line `parseCookies(req)` helper in `server/src/utils/cookies.js`.
++  - Rate limiting for auth endpoints uses a lightweight in-memory sliding-window middleware (`server/src/middleware/rateLimiter.js`).
++
++---
++
++## 3. Required Environment Variables
++
++Update `server/.env.example` (and local `server/.env`) in Milestone 1:
++
++```dotenv
++PORT=5000
++NODE_ENV=development
++MONGODB_URI=mongodb://127.0.0.1:27017/parkease
++CLIENT_URL=http://localhost:5173
++JWT_ACCESS_SECRET=replace-with-a-strong-random-secret
++JWT_ACCESS_EXPIRES_IN=15m
++JWT_REFRESH_EXPIRES_IN=7d
++BCRYPT_SALT_ROUNDS=10
++ADMIN_NAME=ParkEase Admin
++ADMIN_EMAIL=admin@parkease.local
++ADMIN_PASSWORD=replace-with-a-strong-password
++```
++
++`client/.env.example` remains unchanged:
++```dotenv
++VITE_API_URL=http://localhost:5000/api
++```
++
++---
++
++## 4. Admin Bootstrap Script Specification (`server/src/scripts/seedAdmin.js`)
++
++Add `"seed:admin": "node src/scripts/seedAdmin.js"` to `server/package.json` scripts. The script must adhere to these exact safety and operational rules:
++
++1. **Required Environment Variables & Safe Failure:**
++   - Requires `MONGODB_URI`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD` (with optional `ADMIN_NAME`, defaulting to `"ParkEase Admin"`).
++   - Validates that `ADMIN_EMAIL` is a valid email address and `ADMIN_PASSWORD` is at least 8 characters long.
++   - If any required variable is missing or invalid, logs only the missing/invalid variable name(s) (e.g., `"Admin seed failed: ADMIN_EMAIL and ADMIN_PASSWORD (min 8 chars) are required."`) and exits with code `1` before attempting any database writes.
++2. **Password Hashing:**
++   - Hashes `ADMIN_PASSWORD` using `hashPassword(process.env.ADMIN_PASSWORD)` (`bcryptjs` with `BCRYPT_SALT_ROUNDS`, default `10`) and stores only `passwordHash`.
++3. **Duplicate Admin Protection & Idempotent Execution:**
++   - Queries `User.findOne({ $or: [{ email: normalizedEmail }, { role: ROLES.ADMIN }] })`.
++   - If an `ADMIN` user already exists with that email (or if an active `ADMIN` already exists), the script does **not** throw an error, does **not** create a duplicate record, and does **not** overwrite existing credentials — it prints `"Admin account already exists. Skipping seed."`, closes the Mongoose connection cleanly, and exits with code `0`.
++   - If a non-admin user already owns `ADMIN_EMAIL`, it fails safely with code `1` (`"Cannot seed Admin: ADMIN_EMAIL is already registered to a non-admin account."`).
++4. **No Credential Logging:**
++   - Never prints `ADMIN_PASSWORD`, `passwordHash`, or `MONGODB_URI` to `stdout` or `stderr`.
++
++---
++
++## 5. File-by-File Implementation Checklist
++
++### 5.1 New Backend Files to Create (`server/`)
++- [ ] `server/src/constants/statuses.js` — Define `USER_STATUS = { PENDING_APPROVAL: "PENDING_APPROVAL", ACTIVE: "ACTIVE", REJECTED: "REJECTED", SUSPENDED: "SUSPENDED" }` (and reserve enums for `MALL_STATUS`, `SLOT_STATUS`, `BOOKING_STATUS`, `BILLING_STATUS`, `QR_TOKEN_STATUS`).
++- [ ] `server/src/utils/AppError.js` — Operational error class with `status`, `message`, `code`, `details`, and `isOperational = true`.
++- [ ] `server/src/utils/password.js` — `hashPassword(plain)` and `verifyPassword(plain, hash)` wrappers around `bcryptjs`.
++- [ ] `server/src/utils/jwt.js` — `signAccessToken(user)`, `verifyAccessToken(token)`, `generateRefreshToken()`, and `hashToken(rawToken)` (using `node:crypto` SHA-256).
++- [ ] `server/src/utils/cookies.js` — `REFRESH_COOKIE_NAME = "parkease_refresh_token"`, `getRefreshCookieOptions()`, `setRefreshCookie(res, rawToken)`, `clearRefreshCookie(res)`, and `parseCookies(req)`:
++  - Development/Test (`NODE_ENV !== "production"`): `{ httpOnly: true, secure: false, sameSite: "lax", path: "/api/auth", maxAge: 7 * 24 * 60 * 60 * 1000 }`
++  - Production (`NODE_ENV === "production"`): `{ httpOnly: true, secure: true, sameSite: "strict", path: "/api/auth", maxAge: 7 * 24 * 60 * 60 * 1000 }`
++- [ ] `server/src/utils/validators.js` — Input validation helpers (`validateEmail`, `validatePassword`, `validateObjectId`, `requireFields`).
++- [ ] `server/src/models/User.js` — Mongoose schema & model for `User` as specified in `docs/DATABASE_DESIGN.md` Section 3.1.
++- [ ] `server/src/models/RefreshToken.js` — Mongoose schema & model for `RefreshToken` storing `tokenHash` (SHA-256) and `familyId` as specified in `docs/DATABASE_DESIGN.md` Section 3.2.
++- [ ] `server/src/middleware/authMiddleware.js` — Export:
++  - `authenticate(req, res, next)`
++  - `requireActiveAccount(req, res, next)`
++  - `authorize(...allowedRoles)`
++  - `requireApprovedOwner(req, res, next)`
++- [ ] `server/src/middleware/csrfMiddleware.js` — Export `verifyCsrfProtection(req, res, next)` for cookie-authenticated endpoints (`POST /api/auth/refresh`, `POST /api/auth/logout`):
++  - Verifies `req.headers.origin` (when present) matches `process.env.CLIENT_URL || "http://localhost:5173"`.
++  - Verifies `req.headers["x-requested-with"] === "XMLHttpRequest"`.
++  - Throws `new AppError(403, "CSRF validation failed", "CSRF_REJECTED")` on mismatch.
++- [ ] `server/src/middleware/rateLimiter.js` — Lightweight IP-based rate limiter for `/api/auth/login`, `/api/auth/register`, and `/api/auth/refresh` (configurable in test environment).
++- [ ] `server/src/services/authService.js` — Business logic for `registerUser`, `loginUser`, `refreshUserSession`, `logoutUser`, `getCurrentUser`.
++- [ ] `server/src/services/adminUserService.js` — Business logic for listing `MALL_OWNER` accounts and approving/rejecting/suspending them (`updateMallOwnerStatus`).
++- [ ] `server/src/controllers/authController.js` — HTTP handlers for `/api/auth/*` (sets/clears `HttpOnly` refresh cookie via `cookies.js`, never returns `refreshToken` in JSON body).
++- [ ] `server/src/controllers/adminController.js` — HTTP handlers for `/api/admin/mall-owners*`.
++- [ ] `server/src/routes/authRoutes.js` — Express router mounting `/register`, `/login`, `/refresh` (with `verifyCsrfProtection`), `/logout` (with `verifyCsrfProtection`), `/me` (with `authenticate`).
++- [ ] `server/src/routes/adminRoutes.js` — Express router mounting `/mall-owners` and `/mall-owners/:userId/status` (protected by `authenticate`, `requireActiveAccount`, `authorize(ROLES.ADMIN)`).
++- [ ] `server/src/scripts/seedAdmin.js` — Idempotent CLI script to seed the initial `ADMIN` user from `server/.env`.
++- [ ] `server/test/auth.test.js` — Comprehensive unit & HTTP integration tests for Authentication, `HttpOnly` Refresh Cookie Rotation, CSRF protection, RBAC, Admin Seeding logic, and Mall Owner Approval.
++
++### 5.2 Existing Backend Files to Modify (`server/`)
++- [ ] `server/package.json` (and root `package-lock.json`) — Add `bcryptjs` and `jsonwebtoken` dependencies, and add `"seed:admin": "node src/scripts/seedAdmin.js"` script.
++- [ ] `server/.env.example` — Add JWT, bcrypt, and Admin seed environment variable placeholders.
++- [ ] `server/src/app.js` — Update `cors()` configuration to include `credentials: true` and `allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]`.
++- [ ] `server/src/middleware/errorHandler.js` — Upgrade to return `err.message` and optional `err.error` when `err.isOperational === true` (and handle Mongoose `11000` duplicate key errors as `409`), while keeping existing behavior for `400` malformed JSON, `413` body limit, and `500` unexpected errors.
++- [ ] `server/src/routes/index.js` — Mount `router.use("/auth", authRoutes)` and `router.use("/admin", adminRoutes)` alongside `router.use("/health", healthRoutes)`.
++
++### 5.3 New Frontend Files to Create (`client/`)
++- [ ] `client/src/utils/constants.js` — Export `ROLES` and `USER_STATUS` constants matching the backend.
++- [ ] `client/src/services/authService.js` — Functions for `register(payload)`, `login(credentials)`, `refreshSession()`, `logout()`, `getMe()`.
++- [ ] `client/src/context/AuthContext.jsx` — React context provider managing `user` and `accessToken` **in React memory only** (`useState`), calling `refreshSession()` (`POST /api/auth/refresh` with `credentials: "include"`) on initial mount to restore active sessions seamlessly across page reloads without `localStorage`.
++- [ ] `client/src/hooks/useAuth.js` — Custom hook to consume `AuthContext`.
++- [ ] `client/src/components/ProtectedRoute.jsx` — Route wrapper that waits for `isLoading` session check, redirects unauthenticated users to `/login`, and renders an access-denied or pending-approval screen when role/status requirements are not met.
++
++### 5.4 Existing Frontend Files to Modify (`client/`)
++- [ ] `client/src/services/api.js` — Enhance `apiRequest(path, options)` to:
++  1. Hold `accessToken` in a module-scoped in-memory variable (`setAccessToken(token)`, `getAccessToken()`), never in `localStorage`.
++  2. Attach `credentials: "include"` and `X-Requested-With: XMLHttpRequest` on requests, plus `Content-Type: application/json` when `body` is a plain object.
++  3. Attach `Authorization: Bearer <accessToken>` when an in-memory access token is present.
++  4. On `401 Unauthorized` (for non-auth endpoints), attempt a single silent token refresh (`POST /api/auth/refresh` with `credentials: "include"`) and retry the original request with the new in-memory `accessToken`.
++  5. Parse the JSON error response and throw an `Error` carrying `status`, `message` (from backend JSON), and `error` details.
++- [ ] `client/src/main.jsx` — Wrap `<App />` with `<AuthProvider>`.
++- [ ] `client/src/App.jsx` — Wrap `/dashboard` (and role-specific subroutes) with `<ProtectedRoute>`.
++- [ ] `client/src/components/Navbar.jsx` — Show authenticated user's name, role badge, `/dashboard` link, and `Logout` button when logged in; show `Login` and `Register` when logged out.
++- [ ] `client/src/pages/LoginPage.jsx` — Replace placeholder with functional login form, validation, error alert, and role-aware redirect to `/dashboard`.
++- [ ] `client/src/pages/RegisterPage.jsx` — Replace placeholder with functional registration form supporting account type selection (`Customer (USER)` vs. `Mall Owner (MALL_OWNER)`), explaining that Mall Owner accounts require Admin approval.
++- [ ] `client/src/pages/DashboardPage.jsx` — Render role-specific dashboard shell:
++  - `USER`: Active booking status & quick link to discover malls.
++  - `MALL_OWNER` (`PENDING_APPROVAL` / `REJECTED`): Clear onboarding status banner explaining Admin approval state.
++  - `MALL_OWNER` (`ACTIVE`): Mall Owner console shell.
++  - `GUARD`: Guard Gate console shell.
++  - `ADMIN`: Admin approval queue for pending `MALL_OWNER` accounts (with Approve/Reject actions).
++- [ ] `client/src/index.css` — Add clean, accessible form, input, alert, and badge styles matching the existing `#087f6a` emerald palette.
++
++---
++
++## 6. Milestone 1 API Endpoints Specification
++
++| Method | Endpoint | Request Body / Headers | Success Response & Cookies | Error Cases |
++| :--- | :--- | :--- | :--- | :--- |
++| `POST` | `/api/auth/register` | Body: `{ name, email, password, phone?, role?: "USER" \| "MALL_OWNER" }` | `201 Created`: `{ success: true, message, data: { user, accessToken } }` + `Set-Cookie: parkease_refresh_token=<token>; HttpOnly; Path=/api/auth; SameSite=...` | `400` validation / invalid role (`ADMIN`, `GUARD`); `409` duplicate email |
++| `POST` | `/api/auth/login` | Body: `{ email, password }` | `200 OK`: `{ success: true, message, data: { user, accessToken } }` + `Set-Cookie: parkease_refresh_token=<token>; HttpOnly; Path=/api/auth; SameSite=...` | `400` missing fields; `401` invalid credentials; `403` account `REJECTED` or `SUSPENDED` |
++| `POST` | `/api/auth/refresh` | Cookie: `parkease_refresh_token`<br/>Header: `X-Requested-With: XMLHttpRequest` | `200 OK`: `{ success: true, message, data: { user, accessToken } }` + rotated `Set-Cookie: parkease_refresh_token=<newToken>; HttpOnly; ...` | `401` missing, expired, or reused/revoked cookie (clears cookie); `403` CSRF Origin/header failure |
++| `POST` | `/api/auth/logout` | Cookie: `parkease_refresh_token`<br/>Header: `X-Requested-With: XMLHttpRequest` | `200 OK`: `{ success: true, message: "Logged out successfully" }` + cleared `Set-Cookie: parkease_refresh_token=; Max-Age=0; HttpOnly; Path=/api/auth` | `403` CSRF Origin/header failure; `200` idempotent if cookie already absent |
++| `GET` | `/api/auth/me` | Header: `Authorization: Bearer <accessToken>` | `200 OK`: `{ success: true, message, data: { user } }` | `401` missing/expired access token |
++| `GET` | `/api/admin/mall-owners` | Header: `Authorization: Bearer <accessToken>`<br/>Query: `?status=PENDING_APPROVAL` | `200 OK`: `{ success: true, message, data: { mallOwners: [...] } }` | `401` unauthenticated; `403` non-Admin |
++| `PATCH` | `/api/admin/mall-owners/:userId/status` | Header: `Authorization: Bearer <accessToken>`<br/>Body: `{ status: "ACTIVE" \| "REJECTED" \| "SUSPENDED", rejectionReason? }` | `200 OK`: `{ success: true, message, data: { user } }` | `400` invalid status/id; `403` non-Admin; `404` owner not found |
++
++---
++
++## 7. Test Plan for Milestone 1 (`server/test/auth.test.js`)
++
++All existing tests in `server/test/app.test.js` must remain unmodified and passing. New tests in `server/test/auth.test.js` must verify:
++
++1. **Password, JWT & Cookie Utilities Unit Tests:**
++   - `hashPassword` produces a bcrypt hash not equal to plaintext; `verifyPassword` returns `true` for correct password and `false` for wrong password.
++   - `signAccessToken` and `verifyAccessToken` round-trip `{ sub, role, status }` and reject tampered or expired tokens.
++   - `hashToken` produces a deterministic 64-character SHA-256 hex digest different from the raw token.
++   - Cookie helper sets `HttpOnly`, `Path=/api/auth`, `SameSite=Lax` in non-production and `Secure; SameSite=Strict` in production.
++2. **Registration & Role Escalation Prevention:**
++   - Registering as `USER` sets `role: "USER"`, `status: "ACTIVE"`, hashes password, sets `HttpOnly` `parkease_refresh_token` cookie, returns `accessToken` in JSON, and never returns `passwordHash` or `refreshToken` in the JSON body.
++   - Registering as `MALL_OWNER` sets `role: "MALL_OWNER"`, `status: "PENDING_APPROVAL"`.
++   - Attempting to register with `role: "ADMIN"` or `role: "GUARD"` fails with `400 Bad Request`.
++   - Duplicate email registration fails with `409 Conflict`.
++3. **Login & Account Status Enforcement:**
++   - Valid credentials return `200` with `accessToken`, sanitized `user`, and `Set-Cookie: parkease_refresh_token=...; HttpOnly`.
++   - Wrong password or unknown email returns `401 Unauthorized` with identical generic message (`"Invalid email or password"`).
++   - `SUSPENDED` or `REJECTED` user attempting login receives `403 Forbidden`.
++4. **`HttpOnly` Refresh Token Rotation, Reuse Detection & CSRF Protection:**
++   - Calling `POST /api/auth/refresh` with a valid `Cookie: parkease_refresh_token=...` and `X-Requested-With: XMLHttpRequest` rotates the cookie (`Set-Cookie` contains a new token), returns a new `accessToken`, and marks the old `RefreshToken` record in MongoDB as revoked (`revokedAt` set, `replacedByTokenHash` populated).
++   - Replaying the old (already rotated) `parkease_refresh_token` cookie triggers reuse detection, revoking all tokens in that `familyId` and returning `401 Unauthorized`.
++   - Calling `POST /api/auth/refresh` or `POST /api/auth/logout` from an unauthorized `Origin` (e.g. `Origin: https://evil.example`) or without `X-Requested-With: XMLHttpRequest` fails with `403 Forbidden`.
++5. **Authentication & RBAC Middleware:**
++   - Missing, malformed, or expired `Authorization: Bearer` header returns `401 Unauthorized`.
++   - `USER` or `MALL_OWNER` calling `/api/admin/mall-owners` receives `403 Forbidden`.
++   - `MALL_OWNER` with `status: "PENDING_APPROVAL"` calling an endpoint guarded by `requireApprovedOwner` receives `403 Forbidden`.
++   - After `ADMIN` approves the `MALL_OWNER` (`status: "ACTIVE"`), the owner passes `requireApprovedOwner`.
++6. **Admin Bootstrap Script Validation:**
++   - Missing `ADMIN_EMAIL` or short `ADMIN_PASSWORD` fails safely without database writes or credential logging.
++   - Running the seed logic twice is idempotent (creates the `ADMIN` user on the first run with hashed password, and skips cleanly on the second run).
++
++---
++
++## 8. Milestone 1 Acceptance Criteria
++
++- [ ] `npm run lint`, `npm run build`, and `npm test` pass with zero errors or warnings.
++- [ ] Access tokens are held only in React memory; refresh tokens are sent only via `HttpOnly` cookies (`Path=/api/auth`) and stored only as SHA-256 hashes in MongoDB (`RefreshToken`).
++- [ ] Credentialed CORS (`credentials: true`) and CSRF checks (`Origin` + `X-Requested-With`) protect `/api/auth/refresh` and `/api/auth/logout`.
++- [ ] Passwords are never stored or logged in plaintext and `passwordHash` is never serialized in any API response.
++- [ ] Public registration supports `USER` (auto-`ACTIVE`) and `MALL_OWNER` (`PENDING_APPROVAL`) and blocks `ADMIN` and `GUARD`.
++- [ ] Admin bootstrap script (`npm run seed:admin --workspace server`) provisions the `ADMIN` account idempotently with no credential logging.
++- [ ] Admin can view pending Mall Owners and approve or reject them.
++- [ ] Frontend Login, Register, Navbar, ProtectedRoute, and role-aware Dashboard work seamlessly against the backend API, restoring sessions via `POST /api/auth/refresh` on page reload.
+diff --git a/package-lock.json b/package-lock.json
+index 3dba68d..ad16356 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -67,7 +67,6 @@
+       "integrity": "sha512-RgHBCvtjbOK2gXSNBNIkNoEc9qoVEtau3hj8gEqKQuL3HZAibKarWFEI3Lfm6EYKkLalOh8eSrj9b+ch9H/VBA==",
+       "dev": true,
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "@babel/code-frame": "^7.29.7",
+         "@babel/generator": "^7.29.7",
+@@ -1531,7 +1530,6 @@
+       "integrity": "sha512-oJlA3XiRm7Cyk6qFD2Jn8ak9B7jSy0qy00ADO3+8dpT0LSjFihQYv4C02LFCSYJV3Q37xYwwRy5m+IpIiUzqWw==",
+       "dev": true,
+       "license": "MIT",
+-      "peer": true,
+       "bin": {
+         "acorn": "bin/acorn"
+       },
+@@ -1633,6 +1631,15 @@
+         "node": ">=6.0.0"
+       }
+     },
++    "node_modules/bcryptjs": {
++      "version": "3.0.3",
++      "resolved": "https://registry.npmjs.org/bcryptjs/-/bcryptjs-3.0.3.tgz",
++      "integrity": "sha512-GlF5wPWnSa/X5LKM1o0wz0suXIINz1iHRLvTS+sLyi7XPbe5ycmYI3DlZqVGZZtDgl4DmasFg7gOB3JYbphV5g==",
++      "license": "BSD-3-Clause",
++      "bin": {
++        "bcrypt": "bin/bcrypt"
++      }
++    },
+     "node_modules/binary-extensions": {
+       "version": "2.3.0",
+       "resolved": "https://registry.npmjs.org/binary-extensions/-/binary-extensions-2.3.0.tgz",
+@@ -1714,7 +1721,6 @@
+         }
+       ],
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "baseline-browser-mapping": "^2.11.29",
+         "caniuse-lite": "^1.0.30001816",
+@@ -1738,6 +1744,12 @@
+         "node": ">=16.20.1"
+       }
+     },
++    "node_modules/buffer-equal-constant-time": {
++      "version": "1.0.1",
++      "resolved": "https://registry.npmjs.org/buffer-equal-constant-time/-/buffer-equal-constant-time-1.0.1.tgz",
++      "integrity": "sha512-zRpUiDwd/xk6ADqPMATG8vc9VPrkck7T07OIx0gnjmJAnHnTVXNQG3vfvWNuiZIkwu9KrKdA1iJKfsfTVxE6NA==",
++      "license": "BSD-3-Clause"
++    },
+     "node_modules/bytes": {
+       "version": "3.1.2",
+       "resolved": "https://registry.npmjs.org/bytes/-/bytes-3.1.2.tgz",
+@@ -2084,6 +2096,15 @@
+         "node": ">= 0.4"
+       }
+     },
++    "node_modules/ecdsa-sig-formatter": {
++      "version": "1.0.11",
++      "resolved": "https://registry.npmjs.org/ecdsa-sig-formatter/-/ecdsa-sig-formatter-1.0.11.tgz",
++      "integrity": "sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==",
++      "license": "Apache-2.0",
++      "dependencies": {
++        "safe-buffer": "^5.0.1"
++      }
++    },
+     "node_modules/ee-first": {
+       "version": "1.1.1",
+       "resolved": "https://registry.npmjs.org/ee-first/-/ee-first-1.1.1.tgz",
+@@ -2221,7 +2242,6 @@
+       "deprecated": "This version is no longer supported. Please see https://eslint.org/version-support for other options.",
+       "dev": true,
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "@eslint-community/eslint-utils": "^4.8.0",
+         "@eslint-community/regexpp": "^4.12.1",
+@@ -2987,6 +3007,61 @@
+         "node": ">=6"
+       }
+     },
++    "node_modules/jsonwebtoken": {
++      "version": "9.0.3",
++      "resolved": "https://registry.npmjs.org/jsonwebtoken/-/jsonwebtoken-9.0.3.tgz",
++      "integrity": "sha512-MT/xP0CrubFRNLNKvxJ2BYfy53Zkm++5bX9dtuPbqAeQpTVe0MQTFhao8+Cp//EmJp244xt6Drw/GVEGCUj40g==",
++      "license": "MIT",
++      "dependencies": {
++        "jws": "^4.0.1",
++        "lodash.includes": "^4.3.0",
++        "lodash.isboolean": "^3.0.3",
++        "lodash.isinteger": "^4.0.4",
++        "lodash.isnumber": "^3.0.3",
++        "lodash.isplainobject": "^4.0.6",
++        "lodash.isstring": "^4.0.1",
++        "lodash.once": "^4.0.0",
++        "ms": "^2.1.1",
++        "semver": "^7.5.4"
++      },
++      "engines": {
++        "node": ">=12",
++        "npm": ">=6"
++      }
++    },
++    "node_modules/jsonwebtoken/node_modules/semver": {
++      "version": "7.8.6",
++      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.6.tgz",
++      "integrity": "sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw==",
++      "license": "ISC",
++      "bin": {
++        "semver": "bin/semver.js"
++      },
++      "engines": {
++        "node": ">=10"
++      }
++    },
++    "node_modules/jwa": {
++      "version": "2.0.1",
++      "resolved": "https://registry.npmjs.org/jwa/-/jwa-2.0.1.tgz",
++      "integrity": "sha512-hRF04fqJIP8Abbkq5NKGN0Bbr3JxlQ+qhZufXVr0DvujKy93ZCbXZMHDL4EOtodSbCWxOqR8MS1tXA5hwqCXDg==",
++      "license": "MIT",
++      "dependencies": {
++        "buffer-equal-constant-time": "^1.0.1",
++        "ecdsa-sig-formatter": "1.0.11",
++        "safe-buffer": "^5.0.1"
++      }
++    },
++    "node_modules/jws": {
++      "version": "4.0.1",
++      "resolved": "https://registry.npmjs.org/jws/-/jws-4.0.1.tgz",
++      "integrity": "sha512-EKI/M/yqPncGUUh44xz0PxSidXFr/+r0pA70+gIYhjv+et7yxM+s29Y+VGDkovRofQem0fs7Uvf4+YmAdyRduA==",
++      "license": "MIT",
++      "dependencies": {
++        "jwa": "^2.0.1",
++        "safe-buffer": "^5.0.1"
++      }
++    },
+     "node_modules/kareem": {
+       "version": "2.6.3",
+       "resolved": "https://registry.npmjs.org/kareem/-/kareem-2.6.3.tgz",
+@@ -3036,6 +3111,42 @@
+         "url": "https://github.com/sponsors/sindresorhus"
+       }
+     },
++    "node_modules/lodash.includes": {
++      "version": "4.3.0",
++      "resolved": "https://registry.npmjs.org/lodash.includes/-/lodash.includes-4.3.0.tgz",
++      "integrity": "sha512-W3Bx6mdkRTGtlJISOvVD/lbqjTlPPUDTMnlXZFnVwi9NKJ6tiAk6LVdlhZMm17VZisqhKcgzpO5Wz91PCt5b0w==",
++      "license": "MIT"
++    },
++    "node_modules/lodash.isboolean": {
++      "version": "3.0.3",
++      "resolved": "https://registry.npmjs.org/lodash.isboolean/-/lodash.isboolean-3.0.3.tgz",
++      "integrity": "sha512-Bz5mupy2SVbPHURB98VAcw+aHh4vRV5IPNhILUCsOzRmsTmSQ17jIuqopAentWoehktxGd9e/hbIXq980/1QJg==",
++      "license": "MIT"
++    },
++    "node_modules/lodash.isinteger": {
++      "version": "4.0.4",
++      "resolved": "https://registry.npmjs.org/lodash.isinteger/-/lodash.isinteger-4.0.4.tgz",
++      "integrity": "sha512-DBwtEWN2caHQ9/imiNeEA5ys1JoRtRfY3d7V9wkqtbycnAmTvRRmbHKDV4a0EYc678/dia0jrte4tjYwVBaZUA==",
++      "license": "MIT"
++    },
++    "node_modules/lodash.isnumber": {
++      "version": "3.0.3",
++      "resolved": "https://registry.npmjs.org/lodash.isnumber/-/lodash.isnumber-3.0.3.tgz",
++      "integrity": "sha512-QYqzpfwO3/CWf3XP+Z+tkQsfaLL/EnUlXWVkIk5FUPc4sBdTehEqZONuyRt2P67PXAk+NXmTBcc97zw9t1FQrw==",
++      "license": "MIT"
++    },
++    "node_modules/lodash.isplainobject": {
++      "version": "4.0.6",
++      "resolved": "https://registry.npmjs.org/lodash.isplainobject/-/lodash.isplainobject-4.0.6.tgz",
++      "integrity": "sha512-oSXzaWypCMHkPC3NvBEaPHf0KsA5mvPrOPgQWDsbg8n7orZ290M0BmC/jgRZ4vcJ6DTAhjrsSYgdsW/F+MFOBA==",
++      "license": "MIT"
++    },
++    "node_modules/lodash.isstring": {
++      "version": "4.0.1",
++      "resolved": "https://registry.npmjs.org/lodash.isstring/-/lodash.isstring-4.0.1.tgz",
++      "integrity": "sha512-0wJxfxH1wgO3GrbuP+dTTk7op+6L41QCXbGINEmD+ny/G/eCqGzxyCsh7159S+mgDDcoarnBw6PC1PS5+wUGgw==",
++      "license": "MIT"
++    },
+     "node_modules/lodash.merge": {
+       "version": "4.6.2",
+       "resolved": "https://registry.npmjs.org/lodash.merge/-/lodash.merge-4.6.2.tgz",
+@@ -3043,6 +3154,12 @@
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/lodash.once": {
++      "version": "4.1.1",
++      "resolved": "https://registry.npmjs.org/lodash.once/-/lodash.once-4.1.1.tgz",
++      "integrity": "sha512-Sb487aTOCr9drQVL8pIxOzVhafOjZN9UU54hiN8PU3uAiSV7lx1yYNpbNmex2PK6dSJoNTSJUUswT651yww3Mg==",
++      "license": "MIT"
++    },
+     "node_modules/lru-cache": {
+       "version": "5.1.1",
+       "resolved": "https://registry.npmjs.org/lru-cache/-/lru-cache-5.1.1.tgz",
+@@ -3699,7 +3816,6 @@
+       "resolved": "https://registry.npmjs.org/react/-/react-19.3.1.tgz",
+       "integrity": "sha512-QNhWdt7nrgVWWQG58QuGsAR3jv3Hbe4mb4vz7w2csnHavciZJgda1CPNaldF6eVxv90ud3jUXpKlHL69gO38yw==",
+       "license": "MIT",
+-      "peer": true,
+       "engines": {
+         "node": ">=0.10.0"
+       }
+@@ -3709,7 +3825,6 @@
+       "resolved": "https://registry.npmjs.org/react-dom/-/react-dom-19.3.1.tgz",
+       "integrity": "sha512-Y0bARz53lhEC1NMCASs0/j+faB/zqt3R8hpvg1e8+61ZVJ4UL0UdC4cBbXfZMcIuhrfgeILTLe+ZeBCavQPtKQ==",
+       "license": "MIT",
+-      "peer": true,
+       "dependencies": {
+         "scheduler": "^0.28.0"
+       },
+@@ -3883,6 +3998,26 @@
+         "tslib": "^2.1.0"
+       }
+     },
++    "node_modules/safe-buffer": {
++      "version": "5.2.1",
++      "resolved": "https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.2.1.tgz",
++      "integrity": "sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==",
++      "funding": [
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/feross"
++        },
++        {
++          "type": "patreon",
++          "url": "https://www.patreon.com/feross"
++        },
++        {
++          "type": "consulting",
++          "url": "https://feross.org/support"
++        }
++      ],
++      "license": "MIT"
++    },
+     "node_modules/safer-buffer": {
+       "version": "2.1.2",
+       "resolved": "https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz",
+@@ -4228,7 +4363,6 @@
+       "integrity": "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==",
+       "dev": true,
+       "license": "MIT",
+-      "peer": true,
+       "engines": {
+         "node": ">=12"
+       },
+@@ -4493,7 +4627,6 @@
+       "integrity": "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==",
+       "dev": true,
+       "license": "MIT",
+-      "peer": true,
+       "engines": {
+         "node": ">=12"
+       },
+@@ -4638,7 +4771,6 @@
+       "integrity": "sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==",
+       "dev": true,
+       "license": "MIT",
+-      "peer": true,
+       "funding": {
+         "url": "https://github.com/sponsors/colinhacks"
+       }
+@@ -4660,9 +4792,11 @@
+       "name": "parkease-server",
+       "version": "0.1.0",
+       "dependencies": {
++        "bcryptjs": "^3.0.3",
+         "cors": "^2.8.5",
+         "dotenv": "^17.2.3",
+         "express": "^5.1.0",
++        "jsonwebtoken": "^9.0.3",
+         "mongoose": "^8.19.2"
+       },
+       "devDependencies": {
+diff --git a/server/.env.example b/server/.env.example
+index 699e7fe..323c874 100644
+--- a/server/.env.example
++++ b/server/.env.example
+@@ -1,3 +1,11 @@
+ PORT=5000
++NODE_ENV=development
+ MONGODB_URI=mongodb://127.0.0.1:27017/parkease
+ CLIENT_URL=http://localhost:5173
++JWT_ACCESS_SECRET=2Lzl3cmQ+FweszVkzAUDqvCfRBaDMpKlJjMwR2LCsg8=
++JWT_ACCESS_EXPIRES_IN=15m
++JWT_REFRESH_EXPIRES_IN=7d
++BCRYPT_SALT_ROUNDS=10 
++ADMIN_NAME=ParkEase Admin
++ADMIN_EMAIL=admin@parkease.local
++ADMIN_PASSWORD=replace-with-a-strong-password
+diff --git a/server/package.json b/server/package.json
+index da2bf8e..fb36875 100644
+--- a/server/package.json
++++ b/server/package.json
+@@ -9,10 +9,12 @@
+     "test": "node --test"
+   },
+   "dependencies": {
+-    "express": "^5.1.0",
+-    "mongoose": "^8.19.2",
++    "bcryptjs": "^3.0.3",
+     "cors": "^2.8.5",
+-    "dotenv": "^17.2.3"
++    "dotenv": "^17.2.3",
++    "express": "^5.1.0",
++    "jsonwebtoken": "^9.0.3",
++    "mongoose": "^8.19.2"
+   },
+   "devDependencies": {
+     "nodemon": "^3.1.10"
+diff --git a/server/src/constants/statuses.js b/server/src/constants/statuses.js
+new file mode 100644
+index 0000000..60ac060
+--- /dev/null
++++ b/server/src/constants/statuses.js
+@@ -0,0 +1,51 @@
++export const USER_STATUS = Object.freeze({
++  PENDING_APPROVAL: "PENDING_APPROVAL",
++  ACTIVE: "ACTIVE",
++  REJECTED: "REJECTED",
++  SUSPENDED: "SUSPENDED",
++});
++
++export const MALL_STATUS = Object.freeze({
++  PENDING: "PENDING",
++  APPROVED: "APPROVED",
++  REJECTED: "REJECTED",
++  INACTIVE: "INACTIVE",
++});
++
++export const SLOT_STATUS = Object.freeze({
++  AVAILABLE: "AVAILABLE",
++  RESERVED: "RESERVED",
++  OCCUPIED: "OCCUPIED",
++  MAINTENANCE: "MAINTENANCE",
++});
++
++export const BOOKING_STATUS = Object.freeze({
++  CONFIRMED: "CONFIRMED",
++  ACTIVE: "ACTIVE",
++  COMPLETED: "COMPLETED",
++  CANCELLED: "CANCELLED",
++  EXPIRED: "EXPIRED",
++});
++
++export const BILLING_STATUS = Object.freeze({
++  PENDING: "PENDING",
++  GENERATED: "GENERATED",
++  WAIVED: "WAIVED",
++});
++
++export const QR_TOKEN_STATUS = Object.freeze({
++  ACTIVE: "ACTIVE",
++  CONSUMED: "CONSUMED",
++  REVOKED: "REVOKED",
++  EXPIRED: "EXPIRED",
++});
++
++export default Object.freeze({
++  USER_STATUS,
++  MALL_STATUS,
++  SLOT_STATUS,
++  BOOKING_STATUS,
++  BILLING_STATUS,
++  QR_TOKEN_STATUS,
++});
++
+diff --git a/server/src/middleware/errorHandler.js b/server/src/middleware/errorHandler.js
+index e8204ff..7f47358 100644
+--- a/server/src/middleware/errorHandler.js
++++ b/server/src/middleware/errorHandler.js
+@@ -1,9 +1,25 @@
+ export default function errorHandler(err, req, res, next) {
+   if (res.headersSent) return next(err);
++
+   const status =
+-    Number.isInteger(err.status) && err.status >= 400 && err.status <= 599
++    Number.isInteger(err?.status) && err.status >= 400 && err.status <= 599
+       ? err.status
+       : 500;
++
++  if (err?.isOperational === true && status >= 400 && status < 500) {
++    const payload = {
++      success: false,
++      message: err.message || "Request failed",
++    };
++    if (err.code || err.details !== undefined) {
++      payload.error = {
++        ...(err.code ? { code: err.code } : {}),
++        ...(err.details !== undefined ? { details: err.details } : {}),
++      };
++    }
++    return res.status(status).json(payload);
++  }
++
+   const message =
+     status === 400
+       ? "Invalid request body"
+diff --git a/server/src/models/RefreshToken.js b/server/src/models/RefreshToken.js
+new file mode 100644
+index 0000000..16e8e13
+--- /dev/null
++++ b/server/src/models/RefreshToken.js
+@@ -0,0 +1,70 @@
++import mongoose from "mongoose";
++
++const SHA256_HEX_REGEX = /^[a-f0-9]{64}$/;
++
++const refreshTokenSchema = new mongoose.Schema(
++  {
++    userId: {
++      type: mongoose.Schema.Types.ObjectId,
++      ref: "User",
++      required: [true, "userId is required"],
++    },
++    tokenHash: {
++      type: String,
++      required: [true, "tokenHash is required"],
++      trim: true,
++      match: [SHA256_HEX_REGEX, "tokenHash must be a valid SHA-256 hex digest"],
++    },
++    familyId: {
++      type: String,
++      required: [true, "familyId is required"],
++      trim: true,
++    },
++    expiresAt: {
++      type: Date,
++      required: [true, "expiresAt is required"],
++    },
++    revokedAt: {
++      type: Date,
++      default: null,
++    },
++    replacedByTokenHash: {
++      type: String,
++      default: null,
++      trim: true,
++      validate: {
++        validator(value) {
++          return value === null || SHA256_HEX_REGEX.test(value);
++        },
++        message: "replacedByTokenHash must be null or a valid SHA-256 hex digest",
++      },
++    },
++    createdByIp: {
++      type: String,
++      default: null,
++      trim: true,
++    },
++    userAgent: {
++      type: String,
++      default: null,
++      trim: true,
++    },
++  },
++  {
++    timestamps: true,
++  },
++);
++
++refreshTokenSchema.index({ tokenHash: 1 }, { unique: true });
++refreshTokenSchema.index({ userId: 1 });
++refreshTokenSchema.index({ familyId: 1 });
++// TTL index purges token records only after their 7-day natural expiration (`expiresAt`),
++// preserving revoked tokens throughout their validity window for reuse detection.
++refreshTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
++
++const RefreshToken =
++  mongoose.models.RefreshToken ||
++  mongoose.model("RefreshToken", refreshTokenSchema);
++
++export default RefreshToken;
++
+diff --git a/server/src/models/User.js b/server/src/models/User.js
+new file mode 100644
+index 0000000..a7e6386
+--- /dev/null
++++ b/server/src/models/User.js
+@@ -0,0 +1,93 @@
++import mongoose from "mongoose";
++import ROLES from "../constants/roles.js";
++import { USER_STATUS } from "../constants/statuses.js";
++
++const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
++
++function sanitizeUserTransform(_doc, ret) {
++  delete ret.passwordHash;
++  delete ret.__v;
++  return ret;
++}
++
++const userSchema = new mongoose.Schema(
++  {
++    name: {
++      type: String,
++      required: [true, "Name is required"],
++      trim: true,
++      minlength: [2, "Name must be at least 2 characters"],
++      maxlength: [100, "Name cannot exceed 100 characters"],
++    },
++    email: {
++      type: String,
++      required: [true, "Email is required"],
++      lowercase: true,
++      trim: true,
++      maxlength: [254, "Email cannot exceed 254 characters"],
++      match: [EMAIL_REGEX, "Please provide a valid email address"],
++    },
++    phone: {
++      type: String,
++      default: null,
++      trim: true,
++      maxlength: [20, "Phone cannot exceed 20 characters"],
++    },
++    passwordHash: {
++      type: String,
++      required: [true, "Password hash is required"],
++      select: false,
++    },
++    role: {
++      type: String,
++      required: true,
++      enum: {
++        values: Object.values(ROLES),
++        message: "Invalid user role",
++      },
++      default: ROLES.USER,
++    },
++    status: {
++      type: String,
++      required: true,
++      enum: {
++        values: Object.values(USER_STATUS),
++        message: "Invalid user status",
++      },
++      default: USER_STATUS.ACTIVE,
++    },
++    approvedBy: {
++      type: mongoose.Schema.Types.ObjectId,
++      ref: "User",
++      default: null,
++    },
++    approvedAt: {
++      type: Date,
++      default: null,
++    },
++    rejectionReason: {
++      type: String,
++      default: null,
++      trim: true,
++      maxlength: [500, "Rejection reason cannot exceed 500 characters"],
++    },
++    createdBy: {
++      type: mongoose.Schema.Types.ObjectId,
++      ref: "User",
++      default: null,
++    },
++  },
++  {
++    timestamps: true,
++    toJSON: { transform: sanitizeUserTransform },
++    toObject: { transform: sanitizeUserTransform },
++  },
++);
++
++userSchema.index({ email: 1 }, { unique: true });
++userSchema.index({ role: 1, status: 1 });
++
++const User = mongoose.models.User || mongoose.model("User", userSchema);
++
++export default User;
++
+diff --git a/server/src/utils/AppError.js b/server/src/utils/AppError.js
+new file mode 100644
+index 0000000..cdce6ee
+--- /dev/null
++++ b/server/src/utils/AppError.js
+@@ -0,0 +1,13 @@
++export default class AppError extends Error {
++  constructor(status, message, code = "APP_ERROR", details = undefined) {
++    super(message);
++    this.name = "AppError";
++    this.status =
++      Number.isInteger(status) && status >= 400 && status <= 599 ? status : 500;
++    this.code = code;
++    this.details = details;
++    this.isOperational = true;
++    Error.captureStackTrace?.(this, this.constructor);
++  }
++}
++
+diff --git a/server/src/utils/cookies.js b/server/src/utils/cookies.js
+new file mode 100644
+index 0000000..4807770
+--- /dev/null
++++ b/server/src/utils/cookies.js
+@@ -0,0 +1,78 @@
++import AppError from "./AppError.js";
++
++export const REFRESH_COOKIE_NAME = "parkease_refresh_token";
++const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
++
++/**
++ * Returns the HttpOnly refresh cookie options for the current environment.
++ *
++ * Deployment note:
++ * - In local development (http://localhost:5173 -> http://localhost:5000),
++ *   secure is false and sameSite is "lax".
++ * - In production when frontend and backend share the same site/domain,
++ *   secure is true and sameSite is "strict".
++ * - If production frontend and backend are deployed cross-site on separate
++ *   domains, sameSite must be adjusted to "none" (with secure: true) alongside
++ *   strict Origin and custom header CSRF validation.
++ */
++export function getRefreshCookieOptions() {
++  const isProduction = process.env.NODE_ENV === "production";
++  return {
++    httpOnly: true,
++    secure: isProduction,
++    sameSite: isProduction ? "strict" : "lax",
++    path: "/api/auth",
++    maxAge: SEVEN_DAYS_MS,
++  };
++}
++
++export function setRefreshCookie(res, rawToken) {
++  if (!res || typeof res.cookie !== "function") {
++    throw new AppError(500, "Invalid HTTP response object", "INTERNAL_ERROR");
++  }
++  if (typeof rawToken !== "string" || rawToken.trim().length === 0) {
++    throw new AppError(
++      400,
++      "Refresh token must be a non-empty string",
++      "INVALID_TOKEN_INPUT",
++    );
++  }
++  res.cookie(REFRESH_COOKIE_NAME, rawToken, getRefreshCookieOptions());
++}
++
++export function clearRefreshCookie(res) {
++  if (!res || typeof res.clearCookie !== "function") {
++    throw new AppError(500, "Invalid HTTP response object", "INTERNAL_ERROR");
++  }
++  const { httpOnly, secure, sameSite, path } = getRefreshCookieOptions();
++  res.clearCookie(REFRESH_COOKIE_NAME, {
++    httpOnly,
++    secure,
++    sameSite,
++    path,
++  });
++}
++
++export function parseCookies(req) {
++  const header = req?.headers?.cookie;
++  if (typeof header !== "string" || header.trim().length === 0) {
++    return {};
++  }
++
++  const cookies = {};
++  const pairs = header.split(";");
++  for (const pair of pairs) {
++    const separatorIndex = pair.indexOf("=");
++    if (separatorIndex <= 0) continue;
++    const key = pair.slice(0, separatorIndex).trim();
++    const rawValue = pair.slice(separatorIndex + 1).trim();
++    if (!key) continue;
++    try {
++      cookies[key] = decodeURIComponent(rawValue);
++    } catch {
++      cookies[key] = rawValue;
++    }
++  }
++  return cookies;
++}
++
+diff --git a/server/src/utils/jwt.js b/server/src/utils/jwt.js
+new file mode 100644
+index 0000000..ba0d6e9
+--- /dev/null
++++ b/server/src/utils/jwt.js
+@@ -0,0 +1,127 @@
++import crypto from "node:crypto";
++import jwt from "jsonwebtoken";
++import ROLES from "../constants/roles.js";
++import { USER_STATUS } from "../constants/statuses.js";
++import AppError from "./AppError.js";
++
++const DEFAULT_ACCESS_EXPIRES_IN = "15m";
++const PLACEHOLDER_SECRET = "replace-with-a-strong-random-secret";
++const REFRESH_TOKEN_BYTES = 32;
++
++function getAccessSecret() {
++  const secret = process.env.JWT_ACCESS_SECRET;
++  if (
++    typeof secret !== "string" ||
++    secret.trim().length < 16 ||
++    secret.trim() === PLACEHOLDER_SECRET
++  ) {
++    throw new AppError(
++      500,
++      "JWT_ACCESS_SECRET is missing or invalid",
++      "CONFIG_ERROR",
++    );
++  }
++  return secret;
++}
++
++export function signAccessToken(user) {
++  const secret = getAccessSecret();
++  if (!user || typeof user !== "object") {
++    throw new AppError(
++      400,
++      "User object is required to sign access token",
++      "INVALID_TOKEN_PAYLOAD",
++    );
++  }
++
++  const userId = user._id ?? user.id;
++  if (!userId || String(userId).trim().length === 0) {
++    throw new AppError(
++      400,
++      "User id is required to sign access token",
++      "INVALID_TOKEN_PAYLOAD",
++    );
++  }
++
++  if (!Object.values(ROLES).includes(user.role)) {
++    throw new AppError(
++      400,
++      "Valid user role is required to sign access token",
++      "INVALID_TOKEN_PAYLOAD",
++    );
++  }
++
++  if (!Object.values(USER_STATUS).includes(user.status)) {
++    throw new AppError(
++      400,
++      "Valid user status is required to sign access token",
++      "INVALID_TOKEN_PAYLOAD",
++    );
++  }
++
++  const expiresIn =
++    process.env.JWT_ACCESS_EXPIRES_IN?.trim() || DEFAULT_ACCESS_EXPIRES_IN;
++
++  return jwt.sign(
++    {
++      role: user.role,
++      status: user.status,
++    },
++    secret,
++    {
++      algorithm: "HS256",
++      subject: String(userId),
++      expiresIn,
++    },
++  );
++}
++
++export function verifyAccessToken(token) {
++  const secret = getAccessSecret();
++  if (typeof token !== "string" || token.trim().length === 0) {
++    throw new AppError(401, "Access token is required", "TOKEN_MISSING");
++  }
++
++  try {
++    const decoded = jwt.verify(token, secret, { algorithms: ["HS256"] });
++    if (
++      !decoded ||
++      typeof decoded !== "object" ||
++      typeof decoded.sub !== "string" ||
++      !decoded.sub.trim() ||
++      !Object.values(ROLES).includes(decoded.role) ||
++      !Object.values(USER_STATUS).includes(decoded.status)
++    ) {
++      throw new AppError(
++        401,
++        "Invalid access token payload",
++        "INVALID_TOKEN",
++      );
++    }
++    return decoded;
++  } catch (err) {
++    if (err instanceof AppError) {
++      throw err;
++    }
++    if (err?.name === "TokenExpiredError") {
++      throw new AppError(401, "Access token has expired", "TOKEN_EXPIRED");
++    }
++    throw new AppError(401, "Invalid access token", "INVALID_TOKEN");
++  }
++}
++
++export function generateRefreshToken() {
++  return crypto.randomBytes(REFRESH_TOKEN_BYTES).toString("hex");
++}
++
++export function hashToken(rawToken) {
++  if (typeof rawToken !== "string" || rawToken.trim().length === 0) {
++    throw new AppError(
++      400,
++      "Token must be a non-empty string",
++      "INVALID_TOKEN_INPUT",
++    );
++  }
++  return crypto.createHash("sha256").update(rawToken, "utf8").digest("hex");
++}
++
+diff --git a/server/src/utils/password.js b/server/src/utils/password.js
+new file mode 100644
+index 0000000..faf7b4c
+--- /dev/null
++++ b/server/src/utils/password.js
+@@ -0,0 +1,60 @@
++import bcrypt from "bcryptjs";
++import AppError from "./AppError.js";
++
++const DEFAULT_SALT_ROUNDS = 10;
++const MAX_BCRYPT_BYTES = 72;
++
++function getSaltRounds() {
++  const raw = process.env.BCRYPT_SALT_ROUNDS;
++  if (raw === undefined || raw === "") {
++    return DEFAULT_SALT_ROUNDS;
++  }
++  const rounds = Number(raw);
++  if (!Number.isInteger(rounds) || rounds < 4 || rounds > 31) {
++    throw new AppError(
++      500,
++      "Invalid BCRYPT_SALT_ROUNDS configuration",
++      "CONFIG_ERROR",
++    );
++  }
++  return rounds;
++}
++
++export async function hashPassword(plainPassword) {
++  if (typeof plainPassword !== "string" || plainPassword.trim().length === 0) {
++    throw new AppError(
++      400,
++      "Password must be a non-empty string",
++      "INVALID_PASSWORD",
++    );
++  }
++  if (Buffer.byteLength(plainPassword, "utf8") > MAX_BCRYPT_BYTES) {
++    throw new AppError(
++      400,
++      "Password must not exceed 72 bytes",
++      "INVALID_PASSWORD",
++    );
++  }
++  const saltRounds = getSaltRounds();
++  return bcrypt.hash(plainPassword, saltRounds);
++}
++
++export async function verifyPassword(plainPassword, passwordHash) {
++  if (
++    typeof plainPassword !== "string" ||
++    plainPassword.length === 0 ||
++    typeof passwordHash !== "string" ||
++    passwordHash.trim().length === 0
++  ) {
++    throw new AppError(
++      400,
++      "Password and passwordHash must be non-empty strings",
++      "INVALID_PASSWORD_INPUT",
++    );
++  }
++  if (Buffer.byteLength(plainPassword, "utf8") > MAX_BCRYPT_BYTES) {
++    return false;
++  }
++  return bcrypt.compare(plainPassword, passwordHash);
++}
++
+diff --git a/server/src/utils/validators.js b/server/src/utils/validators.js
+new file mode 100644
+index 0000000..7caf9e4
+--- /dev/null
++++ b/server/src/utils/validators.js
+@@ -0,0 +1,88 @@
++import mongoose from "mongoose";
++import AppError from "./AppError.js";
++
++const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
++const OBJECT_ID_HEX_REGEX = /^[a-fA-F0-9]{24}$/;
++const MIN_PASSWORD_LENGTH = 8;
++const MAX_PASSWORD_BYTES = 72;
++
++export function validateEmail(email) {
++  if (typeof email !== "string") {
++    throw new AppError(400, "Email address is required", "INVALID_EMAIL");
++  }
++  const normalized = email.trim().toLowerCase();
++  if (
++    normalized.length === 0 ||
++    normalized.length > 254 ||
++    !EMAIL_REGEX.test(normalized)
++  ) {
++    throw new AppError(400, "Invalid email address", "INVALID_EMAIL");
++  }
++  return normalized;
++}
++
++export function validatePassword(password) {
++  if (typeof password !== "string") {
++    throw new AppError(400, "Password is required", "INVALID_PASSWORD");
++  }
++  if (
++    password.trim().length === 0 ||
++    password.length < MIN_PASSWORD_LENGTH
++  ) {
++    throw new AppError(
++      400,
++      `Password must be at least ${MIN_PASSWORD_LENGTH} characters long`,
++      "INVALID_PASSWORD",
++    );
++  }
++  if (Buffer.byteLength(password, "utf8") > MAX_PASSWORD_BYTES) {
++    throw new AppError(
++      400,
++      `Password must not exceed ${MAX_PASSWORD_BYTES} bytes`,
++      "INVALID_PASSWORD",
++    );
++  }
++  return password;
++}
++
++export function validateObjectId(id, fieldName = "id") {
++  if (id === undefined || id === null) {
++    throw new AppError(400, `Invalid ${fieldName}`, "INVALID_OBJECT_ID");
++  }
++  const strId = String(id).trim();
++  if (
++    !OBJECT_ID_HEX_REGEX.test(strId) ||
++    !mongoose.Types.ObjectId.isValid(strId)
++  ) {
++    throw new AppError(400, `Invalid ${fieldName}`, "INVALID_OBJECT_ID");
++  }
++  return strId;
++}
++
++export function requireFields(payload, fieldNames = []) {
++  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
++    throw new AppError(400, "Request payload must be an object", "INVALID_BODY");
++  }
++
++  const missing = [];
++  for (const field of fieldNames) {
++    const value = payload[field];
++    if (
++      value === undefined ||
++      value === null ||
++      (typeof value === "string" && value.trim().length === 0)
++    ) {
++      missing.push({ field, issue: `${field} is required` });
++    }
++  }
++
++  if (missing.length > 0) {
++    throw new AppError(
++      400,
++      `Missing required fields: ${missing.map((m) => m.field).join(", ")}`,
++      "MISSING_REQUIRED_FIELDS",
++      missing,
++    );
++  }
++}
++
+diff --git a/server/test/auth-utils.test.js b/server/test/auth-utils.test.js
+new file mode 100644
+index 0000000..10401bd
+--- /dev/null
++++ b/server/test/auth-utils.test.js
+@@ -0,0 +1,354 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import jwt from "jsonwebtoken";
++import mongoose from "mongoose";
++import ROLES from "../src/constants/roles.js";
++import { USER_STATUS } from "../src/constants/statuses.js";
++import AppError from "../src/utils/AppError.js";
++import errorHandler from "../src/middleware/errorHandler.js";
++import { hashPassword, verifyPassword } from "../src/utils/password.js";
++import {
++  signAccessToken,
++  verifyAccessToken,
++  generateRefreshToken,
++  hashToken,
++} from "../src/utils/jwt.js";
++import {
++  REFRESH_COOKIE_NAME,
++  getRefreshCookieOptions,
++  setRefreshCookie,
++  clearRefreshCookie,
++  parseCookies,
++} from "../src/utils/cookies.js";
++import {
++  validateEmail,
++  validatePassword,
++  validateObjectId,
++  requireFields,
++} from "../src/utils/validators.js";
++import User from "../src/models/User.js";
++import RefreshToken from "../src/models/RefreshToken.js";
++
++const TEST_SECRET = "test-only-access-secret-with-sufficient-length-32b";
++
++test("1 & 2. Password hashing, verification, and incorrect/invalid password handling", async () => {
++  const originalRounds = process.env.BCRYPT_SALT_ROUNDS;
++  try {
++    process.env.BCRYPT_SALT_ROUNDS = "4";
++    const plain = "CorrectHorseBatteryStaple!9";
++    const hash = await hashPassword(plain);
++
++    assert.notEqual(hash, plain);
++    assert.match(hash, /^\$2[abxy]\$04\$/);
++    assert.equal(await verifyPassword(plain, hash), true);
++    assert.equal(await verifyPassword("WrongPassword!9", hash), false);
++
++    await assert.rejects(hashPassword(""), (err) => {
++      assert.equal(err instanceof AppError, true);
++      assert.equal(err.status, 400);
++      return true;
++    });
++    await assert.rejects(verifyPassword("", hash), (err) => {
++      assert.equal(err instanceof AppError, true);
++      assert.equal(err.status, 400);
++      return true;
++    });
++  } finally {
++    if (originalRounds === undefined) delete process.env.BCRYPT_SALT_ROUNDS;
++    else process.env.BCRYPT_SALT_ROUNDS = originalRounds;
++  }
++});
++
++test("3, 4 & 5. JWT signing, verification, expired token rejection, and tampered token rejection", () => {
++  const originalSecret = process.env.JWT_ACCESS_SECRET;
++  const originalExpires = process.env.JWT_ACCESS_EXPIRES_IN;
++
++  try {
++    process.env.JWT_ACCESS_SECRET = TEST_SECRET;
++    delete process.env.JWT_ACCESS_EXPIRES_IN;
++
++    const userId = new mongoose.Types.ObjectId().toString();
++    const token = signAccessToken({
++      _id: userId,
++      role: ROLES.MALL_OWNER,
++      status: USER_STATUS.PENDING_APPROVAL,
++    });
++
++    const decoded = verifyAccessToken(token);
++    assert.equal(decoded.sub, userId);
++    assert.equal(decoded.role, ROLES.MALL_OWNER);
++    assert.equal(decoded.status, USER_STATUS.PENDING_APPROVAL);
++    assert.equal(decoded.exp - decoded.iat, 15 * 60);
++
++    // 4. Expired JWT rejection
++    const expiredToken = jwt.sign(
++      { role: ROLES.USER, status: USER_STATUS.ACTIVE },
++      TEST_SECRET,
++      { algorithm: "HS256", subject: userId, expiresIn: -10 },
++    );
++    assert.throws(
++      () => verifyAccessToken(expiredToken),
++      (err) =>
++        err instanceof AppError &&
++        err.status === 401 &&
++        err.code === "TOKEN_EXPIRED",
++    );
++
++    // 5. Tampered JWT rejection
++    const parts = token.split(".");
++    const tamperedPayload = Buffer.from(
++      JSON.stringify({ sub: userId, role: ROLES.ADMIN, status: USER_STATUS.ACTIVE }),
++    ).toString("base64url");
++    const tamperedToken = `${parts[0]}.${tamperedPayload}.${parts[2]}`;
++    assert.throws(
++      () => verifyAccessToken(tamperedToken),
++      (err) =>
++        err instanceof AppError &&
++        err.status === 401 &&
++        err.code === "INVALID_TOKEN",
++    );
++
++    // Reject missing or placeholder secret
++    process.env.JWT_ACCESS_SECRET = "replace-with-a-strong-random-secret";
++    assert.throws(
++      () =>
++        signAccessToken({
++          id: userId,
++          role: ROLES.USER,
++          status: USER_STATUS.ACTIVE,
++        }),
++      (err) => err instanceof AppError && err.status === 500,
++    );
++  } finally {
++    if (originalSecret === undefined) delete process.env.JWT_ACCESS_SECRET;
++    else process.env.JWT_ACCESS_SECRET = originalSecret;
++    if (originalExpires === undefined) delete process.env.JWT_ACCESS_EXPIRES_IN;
++    else process.env.JWT_ACCESS_EXPIRES_IN = originalExpires;
++  }
++});
++
++test("6 & 7. Random opaque refresh-token generation and SHA-256 hash output", () => {
++  const tokenA = generateRefreshToken();
++  const tokenB = generateRefreshToken();
++
++  assert.equal(typeof tokenA, "string");
++  assert.equal(tokenA.length, 64);
++  assert.match(tokenA, /^[a-f0-9]{64}$/);
++  assert.notEqual(tokenA, tokenB);
++  assert.equal(tokenA.includes("."), false);
++
++  const hashA1 = hashToken(tokenA);
++  const hashA2 = hashToken(tokenA);
++  const hashB = hashToken(tokenB);
++
++  assert.equal(hashA1, hashA2);
++  assert.notEqual(hashA1, tokenA);
++  assert.notEqual(hashA1, hashB);
++  assert.match(hashA1, /^[a-f0-9]{64}$/);
++
++  assert.throws(
++    () => hashToken(""),
++    (err) => err instanceof AppError && err.status === 400,
++  );
++});
++
++test("8, 9 & 10. Cookie options in development/production, clearing attributes, and cookie parsing", () => {
++  const originalEnv = process.env.NODE_ENV;
++  try {
++    // 8. Development cookie options
++    process.env.NODE_ENV = "development";
++    const devOptions = getRefreshCookieOptions();
++    assert.deepEqual(devOptions, {
++      httpOnly: true,
++      secure: false,
++      sameSite: "lax",
++      path: "/api/auth",
++      maxAge: 7 * 24 * 60 * 60 * 1000,
++    });
++
++    // 9. Production cookie options
++    process.env.NODE_ENV = "production";
++    const prodOptions = getRefreshCookieOptions();
++    assert.deepEqual(prodOptions, {
++      httpOnly: true,
++      secure: true,
++      sameSite: "strict",
++      path: "/api/auth",
++      maxAge: 7 * 24 * 60 * 60 * 1000,
++    });
++
++    // 10. Cookie setting and clearing attributes match
++    let setCall = null;
++    let clearCall = null;
++    const mockRes = {
++      cookie(name, val, opts) {
++        setCall = { name, val, opts };
++      },
++      clearCookie(name, opts) {
++        clearCall = { name, opts };
++      },
++    };
++
++    const rawToken = generateRefreshToken();
++    setRefreshCookie(mockRes, rawToken);
++    clearRefreshCookie(mockRes);
++
++    assert.equal(setCall.name, REFRESH_COOKIE_NAME);
++    assert.equal(setCall.val, rawToken);
++    assert.equal(clearCall.name, REFRESH_COOKIE_NAME);
++    assert.equal(clearCall.opts.httpOnly, setCall.opts.httpOnly);
++    assert.equal(clearCall.opts.secure, setCall.opts.secure);
++    assert.equal(clearCall.opts.sameSite, setCall.opts.sameSite);
++    assert.equal(clearCall.opts.path, setCall.opts.path);
++
++    const parsed = parseCookies({
++      headers: {
++        cookie: `theme=light; ${REFRESH_COOKIE_NAME}=${rawToken}`,
++      },
++    });
++    assert.equal(parsed[REFRESH_COOKIE_NAME], rawToken);
++    assert.equal(parsed.theme, "light");
++  } finally {
++    if (originalEnv === undefined) delete process.env.NODE_ENV;
++    else process.env.NODE_ENV = originalEnv;
++  }
++});
++
++test("11 & 12. Email normalization/validation, ObjectId validation, password/field validators, and AppError handler", () => {
++  assert.equal(validateEmail("  User.Name@Example.COM "), "user.name@example.com");
++  assert.throws(
++    () => validateEmail("not-an-email"),
++    (err) => err instanceof AppError && err.status === 400,
++  );
++
++  const validId = new mongoose.Types.ObjectId().toString();
++  assert.equal(validateObjectId(` ${validId} `), validId);
++  assert.throws(
++    () => validateObjectId("12345", "mallId"),
++    (err) =>
++      err instanceof AppError &&
++      err.status === 400 &&
++      err.message === "Invalid mallId",
++  );
++
++  assert.equal(validatePassword("StrongPass123"), "StrongPass123");
++  assert.throws(
++    () => validatePassword("short"),
++    (err) => err instanceof AppError && err.status === 400,
++  );
++
++  assert.doesNotThrow(() =>
++    requireFields({ email: "a@b.com", name: "Alice" }, ["email", "name"]),
++  );
++  assert.throws(
++    () => requireFields({ email: "   " }, ["email", "password"]),
++    (err) =>
++      err instanceof AppError &&
++      err.status === 400 &&
++      Array.isArray(err.details) &&
++      err.details.length === 2,
++  );
++
++  // Verify operational AppError formatting in errorHandler
++  let status;
++  let body;
++  const res = {
++    status(code) {
++      status = code;
++      return this;
++    },
++    json(payload) {
++      body = payload;
++    },
++  };
++  errorHandler(
++    new AppError(403, "Account pending approval", "ACCOUNT_PENDING"),
++    {},
++    res,
++    () => {},
++  );
++  assert.equal(status, 403);
++  assert.deepEqual(body, {
++    success: false,
++    message: "Account pending approval",
++    error: { code: "ACCOUNT_PENDING" },
++  });
++});
++
++test("13. User model validation, defaults, and passwordHash serialization suppression", () => {
++  const user = new User({
++    name: "  Shikhar Srivastava  ",
++    email: "  SHIKHAR@Example.com ",
++    passwordHash: "$2b$10$abcdefghijklmnopqrstuv1234567890abcdefghijklmnopqrstu",
++  });
++
++  const validationError = user.validateSync();
++  assert.equal(validationError, undefined);
++  assert.equal(user.name, "Shikhar Srivastava");
++  assert.equal(user.email, "shikhar@example.com");
++  assert.equal(user.role, ROLES.USER);
++  assert.equal(user.status, USER_STATUS.ACTIVE);
++
++  const serialized = user.toJSON();
++  assert.equal("passwordHash" in serialized, false);
++  assert.equal(serialized.email, "shikhar@example.com");
++
++  const invalidUser = new User({
++    name: "A",
++    email: "bad-email",
++    role: "SUPERUSER",
++    status: "UNKNOWN",
++  });
++  const err = invalidUser.validateSync();
++  assert.ok(err);
++  assert.ok(err.errors.name);
++  assert.ok(err.errors.email);
++  assert.ok(err.errors.passwordHash);
++  assert.ok(err.errors.role);
++  assert.ok(err.errors.status);
++});
++
++test("14. RefreshToken model validation, SHA-256 hash enforcement, and schema indexes", () => {
++  const rawToken = generateRefreshToken();
++  const tokenHash = hashToken(rawToken);
++  const userId = new mongoose.Types.ObjectId();
++
++  const validDoc = new RefreshToken({
++    userId,
++    tokenHash,
++    familyId: "family-uuid-1234",
++    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
++  });
++  assert.equal(validDoc.validateSync(), undefined);
++  assert.equal(validDoc.revokedAt, null);
++  assert.equal(validDoc.replacedByTokenHash, null);
++
++  const invalidDoc = new RefreshToken({
++    tokenHash: "plaintext-not-a-sha256-hash",
++    replacedByTokenHash: "also-invalid-hash",
++  });
++  const err = invalidDoc.validateSync();
++  assert.ok(err);
++  assert.ok(err.errors.userId);
++  assert.ok(err.errors.tokenHash);
++  assert.ok(err.errors.familyId);
++  assert.ok(err.errors.expiresAt);
++  assert.ok(err.errors.replacedByTokenHash);
++
++  const indexes = RefreshToken.schema.indexes();
++  const hasUniqueTokenHash = indexes.some(
++    ([fields, opts]) => fields.tokenHash === 1 && opts.unique === true,
++  );
++  const hasUserIdIndex = indexes.some(([fields]) => fields.userId === 1);
++  const hasFamilyIdIndex = indexes.some(([fields]) => fields.familyId === 1);
++  const hasTtlIndex = indexes.some(
++    ([fields, opts]) =>
++      fields.expiresAt === 1 && opts.expireAfterSeconds === 0,
++  );
++
++  assert.equal(hasUniqueTokenHash, true);
++  assert.equal(hasUserIdIndex, true);
++  assert.equal(hasFamilyIdIndex, true);
++  assert.equal(hasTtlIndex, true);
++});
++
