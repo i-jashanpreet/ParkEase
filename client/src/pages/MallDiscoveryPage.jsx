@@ -1,3 +1,5 @@
+import Icon from "../components/Icon.jsx";
+import MallIllustration from "../components/MallIllustration.jsx";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Button from "../components/Button.jsx";
 import Card from "../components/Card.jsx";
@@ -114,11 +116,11 @@ export default function MallDiscoveryPage({
         {/* Page Header */}
         <PageHeader
           eyebrow="EXPLORE DESTINATIONS"
-          title="Mall Directory & Smart Parking"
-          description="Discover partner shopping malls equipped with ParkEase parking intelligence, live bay availability, and automated QR gate access."
+          title="Where are we heading?"
+          description="Find your next destination. Explore approved malls, parking rates and opening hours."
           badge={
             <Badge variant="accent" dot>
-              Live Directory
+              Approved locations
             </Badge>
           }
           actions={
@@ -154,7 +156,7 @@ export default function MallDiscoveryPage({
               placeholder="Search by mall name, area, or address..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              icon={<span aria-hidden="true">🔍</span>}
+              icon={<Icon name="search" size={18} />}
             />
           </div>
 
@@ -211,7 +213,7 @@ export default function MallDiscoveryPage({
           <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             {hasActiveFilters ? (
               <EmptyState
-                icon="🔍"
+                icon={<Icon name="search" size={28} />}
                 title="No Matching Malls Found"
                 description="No shopping malls match your current search criteria. Try modifying your search or clearing your filters."
                 action={
@@ -223,17 +225,17 @@ export default function MallDiscoveryPage({
             ) : (
               <>
                 <EmptyState
-                  icon="🏢"
-                  title="Mall Directory Under Construction"
-                  description="The live mall parking intelligence directory will activate once partner shopping malls are provisioned."
+                  icon={<Icon name="building" size={28} />}
+                  title="Your next destination is on its way."
+                  description="Approved malls will appear here. Check back as new locations join ParkEase."
                 />
 
                 {isPendingBackend && (
                   <div className="auth-status-banner info" role="status">
                     <div>
-                      <strong>Sprint 3 Notice: </strong>
+                      <strong>Directory unavailable. </strong>
                       <span>
-                        Backend mall management services are currently pending release (Shikhar - Sprint 3).
+                        Please check back later for new locations.
                         No live mall records are connected yet.
                       </span>
                     </div>
@@ -249,10 +251,11 @@ export default function MallDiscoveryPage({
           <div className="malls-grid" role="list" aria-label="Shopping malls list">
             {filteredMalls.map((mall) => (
               <Card key={mall.id} className="mall-card" role="listitem">
+                <MallIllustration compact />
                 <div>
                   <div className="mall-card-header">
                     <h3 className="mall-card-title">{mall.name}</h3>
-                    <Badge variant={mall.status === "ACTIVE" ? "success" : "neutral"} size="sm" dot>
+                    <Badge variant={mall.status === "APPROVED" ? "success" : "neutral"} size="sm" dot>
                       {mall.status}
                     </Badge>
                   </div>
@@ -261,9 +264,7 @@ export default function MallDiscoveryPage({
                     {/* Location / Address */}
                     {(mall.address || mall.location) && (
                       <div className="mall-meta-row">
-                        <span className="mall-meta-icon" aria-hidden="true">
-                          📍
-                        </span>
+                        <span className="mall-meta-icon" aria-hidden="true"><Icon name="pin" size={16} /></span>
                         <span>
                           {mall.address}
                           {mall.city && mall.address ? `, ${mall.city}` : mall.city}
@@ -274,9 +275,7 @@ export default function MallDiscoveryPage({
                     {/* Operating Hours (if provided by backend) */}
                     {mall.operatingHours && (
                       <div className="mall-meta-row">
-                        <span className="mall-meta-icon" aria-hidden="true">
-                          🕒
-                        </span>
+                        <span className="mall-meta-icon" aria-hidden="true"><Icon name="clock" size={16} /></span>
                         <span>Open: {mall.operatingHours}</span>
                       </div>
                     )}
@@ -284,9 +283,7 @@ export default function MallDiscoveryPage({
                     {/* Contact Phone (if provided by backend) */}
                     {mall.contactPhone && (
                       <div className="mall-meta-row">
-                        <span className="mall-meta-icon" aria-hidden="true">
-                          📞
-                        </span>
+
                         <span>{mall.contactPhone}</span>
                       </div>
                     )}
@@ -294,7 +291,7 @@ export default function MallDiscoveryPage({
                     {/* Parking Capacity (if provided by backend) */}
                     {typeof mall.totalSlots === "number" && (
                       <div className="mall-slots-pill">
-                        <span aria-hidden="true">🅿</span>
+
                         <span>
                           Capacity: <strong>{mall.totalSlots}</strong> bays
                           {typeof mall.availableSlots === "number" && (
@@ -306,6 +303,7 @@ export default function MallDiscoveryPage({
                   </div>
                 </div>
 
+                {typeof mall.hourlyRatePaise === "number" && <p className="discovery-rate">₹{(mall.hourlyRatePaise / 100).toFixed(2)} <span>/ hour</span></p>}
                 <div className="mall-card-actions">
                   <Button
                     to={`/malls/${mall.id}`}
@@ -315,8 +313,8 @@ export default function MallDiscoveryPage({
                     View Details ↗
                   </Button>
                   <Button
-                    to={`/malls/${mall.id}`}
-                    variant="accent"
+                    to={`/malls/${mall.id}/parking`}
+                    variant="outline"
                     size="sm"
                   >
                     Find Parking

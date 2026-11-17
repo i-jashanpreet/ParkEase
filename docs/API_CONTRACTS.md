@@ -156,10 +156,10 @@ All error responses (`4xx`, `5xx`) follow a uniform JSON envelope compatible wit
 ### 3.3 Mall Management (`/api/malls`)
 | Method | Route | Auth Required | Required Role | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/malls` | No | Public | List publicly discoverable malls (`Mall.status === "APPROVED"`), with optional `city` and `search` filters and live available slot counts. |
-| `GET` | `/api/malls/:mallId` | No | Public | View public details and real-time slot availability summary for an `APPROVED` mall. |
-| `POST` | `/api/malls` | Yes | `MALL_OWNER` *(Account `ACTIVE`)* | Submit a new mall profile (`Mall.status` initialized to `"PENDING"`). Blocked with `403` if owner account is still `PENDING_APPROVAL`. |
-| `GET` | `/api/malls/owner/my-malls` | Yes | `MALL_OWNER` | List all malls owned by the authenticated `MALL_OWNER` (includes `PENDING`, `APPROVED`, `REJECTED`, `INACTIVE`). |
+| `GET` | `/api/malls` | No | Public | List publicly discoverable malls (`Mall.status === "APPROVED"`), with optional case-insensitive `city` and literal `search` filters. Returns `data.malls` and `data.total`. |
+| `GET` | `/api/malls/:mallId` | No | Public | Return public profile fields in `data.mall`. Pending, rejected, inactive, and missing malls return `404`. Slot availability is a separate endpoint. |
+| `POST` | `/api/malls` | Yes | `MALL_OWNER` *(Account `ACTIVE`)* | Submit a mall with `name`, `city`, `address`, and integer `hourlyRatePaise`. Optional fields are `description`, `openingTime`, and `closingTime`. The API sets the owner and `PENDING` status and returns `201` with `data.mall`. An exact duplicate name, city, and address returns `409`. |
+| `GET` | `/api/malls/owner/my-malls` | Yes | `MALL_OWNER` *(Account `ACTIVE`)* | Return `data.malls` for the authenticated owner. List all malls owned by the authenticated `MALL_OWNER` (includes `PENDING`, `APPROVED`, `REJECTED`, `INACTIVE`). |
 | `GET` | `/api/malls/owner/:mallId` | Yes | `MALL_OWNER` *(Owner of mall)* | Get full management details for an owner's specific mall, including approval metadata. |
 | `PATCH` | `/api/malls/:mallId` | Yes | `MALL_OWNER` *(Owner of mall)* | Update mall details (`name`, `description`, `hourlyRate`, `openingTime`, `closingTime`, or resubmit a `REJECTED` mall). |
 
@@ -240,5 +240,5 @@ All error responses (`4xx`, `5xx`) follow a uniform JSON envelope compatible wit
 | `GET` | `/api/admin/mall-owners` | Yes | `ADMIN` | List `MALL_OWNER` accounts filtered by `status` (`PENDING_APPROVAL`, `ACTIVE`, `REJECTED`, `SUSPENDED`). |
 | `PATCH` | `/api/admin/mall-owners/:userId/status` | Yes | `ADMIN` | Approve (`status: "ACTIVE"`), reject (`status: "REJECTED"` with `rejectionReason`), a pending `MALL_OWNER` account, or suspend (`status: "SUSPENDED"`) an active owner. Returns `409` for invalid transitions. |
 | `GET` | `/api/admin/malls` | Yes | `ADMIN` | List all submitted malls filtered by `status` (`PENDING`, `APPROVED`, `REJECTED`, `INACTIVE`). |
-| `PATCH` | `/api/admin/malls/:mallId/status` | Yes | `ADMIN` | Approve (`status: "APPROVED"`), reject (`status: "REJECTED"` with `rejectionReason`), or deactivate (`status: "INACTIVE"`) a mall. |
+| `PATCH` | `/api/admin/malls/:mallId/status` | Yes | `ADMIN` | Approve (`status: "APPROVED"`), reject (`status: "REJECTED"` with `rejectionReason`) a pending mall, or deactivate (`status: "INACTIVE"`) an approved mall. Invalid transitions return `409`. |
 | `POST` | `/api/admin/guards` | Yes | `ADMIN` | Admin endpoint to provision a `GUARD` account and assign them to any `Mall`. |

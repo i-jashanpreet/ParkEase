@@ -192,9 +192,9 @@ test("DashboardPage: empty and pending backend states without fake data", () => 
 
   // Empty state title & description
   assert.match(html, /No Parking Reservations Found/);
-  assert.match(html, /haven(&#x27;|')t reserved any parking bays yet/);
+  assert.match(html, /Your parking visits will appear here/);
   assert.match(html, /Find Parking Now/);
-  assert.match(html, /Sprint 4 Note/);
+  assert.match(html, /Reservations are coming next/);
 });
 
 test("DashboardPage: populated bookings list renders booking cards, status, vehicle, and bay info", () => {

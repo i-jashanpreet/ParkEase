@@ -269,8 +269,7 @@ test("ParkingAvailabilityPage: renders mall branding, summary cards, and slot gr
   );
 
   // Mall context & Header
-  assert.match(html, /Parking Bays at Phoenix Marketcity/);
-  assert.match(html, /PARKING AVAILABILITY • MUMBAI/);
+  assert.match(html, /Phoenix Marketcity/);
   assert.match(html, /LBS Marg, Kurla West/);
 
   // Summary StatCards rendered with actual counts
@@ -296,8 +295,8 @@ test("ParkingAvailabilityPage: renders mall branding, summary cards, and slot gr
   assert.match(html, /RESERVED/);
 
   // EV & Accessible feature chips
-  assert.match(html, /⚡ EV/);
-  assert.match(html, /♿ Accessible/);
+  assert.match(html, />EV<\/small>/);
+  assert.match(html, />Accessible<\/small>/);
 
   // Back button to Mall Details
   assert.match(html, /← Back to Mall Details/);
@@ -329,7 +328,7 @@ test("ParkingAvailabilityPage: dynamic floor and vehicle filtering controls", ()
   );
 
   // Dynamic filter options generated from backend data
-  assert.match(html, /All Floors \(2\)/);
+  assert.match(html, /All floors/);
   assert.match(html, /Level 1/);
   assert.match(html, /Level 2/);
   assert.match(html, /All Vehicle Types/);
@@ -351,6 +350,7 @@ test("ParkingAvailabilityPage: pending backend safe state without fake statistic
         initialData: {
           slots: [],
           summary: null,
+          isPendingBackend: true,
           supportedFloors: [],
           supportedVehicleTypes: [],
           supportedStatuses: [],
@@ -361,7 +361,7 @@ test("ParkingAvailabilityPage: pending backend safe state without fake statistic
 
   // Informative fallback
   assert.match(html, /Parking Availability Unavailable/);
-  assert.match(html, /Sprint 3 \/ Sprint 4 Notice/);
+  assert.match(html, /Parking availability is not connected yet/);
   assert.match(html, /Return to Mall Profile/);
 
   // Verification: No fabricated summary values are rendered
@@ -417,6 +417,5 @@ test("MallDetailsPage: includes navigation link to Parking Availability interfac
   assert.match(html, /View Parking Availability/);
   assert.match(html, /\/malls\/phoenix-kurla\/parking/);
 
-  // Backward compatibility: Find & Reserve Parking action also remains
-  assert.match(html, /Find &amp; Reserve Parking/);
+  assert.match(html, /Online booking and QR entry are not available yet/);
 });

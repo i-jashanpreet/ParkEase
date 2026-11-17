@@ -161,11 +161,11 @@ Represents a physical shopping mall managed by an approved `MALL_OWNER`.
 | `address` | `String` | Yes | — | Full street address (`trim: true`, `maxlength: 250`). |
 | `city` | `String` | Yes | — | `trim: true`, `maxlength: 80`. |
 | `description` | `String` | No | `""` | `maxlength: 500`. |
-| `hourlyRate` | `Number` | Yes | — | `min: 0`, `max: 10000`. Currency rate per hour (in INR / base currency units). |
+| `hourlyRatePaise` | `Number` | Yes | — | Integer from 0 to 1,000,000 paise per hour. The dashboard displays the rate in rupees. |
 | `openingTime` | `String` | No | `"08:00"` | `HH:mm` 24-hour format. |
 | `closingTime` | `String` | No | `"23:00"` | `HH:mm` 24-hour format. |
 | `status` | `String` | Yes | `"PENDING"` | `enum: Object.values(MALL_STATUS)`. Starts as `"PENDING"`. |
-| `approvedBy` | `ObjectId` (`ref: "User"`) | No | `null` | Admin who approved/rejected the mall. |
+| `approvedBy` | `ObjectId` (`ref: "User"`) | No | `null` | Admin who approved the mall. |
 | `approvedAt` | `Date` | No | `null` | Timestamp of Admin approval. |
 | `rejectionReason` | `String` | No | `null` | Reason provided if Admin sets `status: "REJECTED"`. |
 | `totalSlots` | `Number` | Yes | `0` | `min: 0`. Informational counter or derived count of active slots. |
@@ -173,8 +173,8 @@ Represents a physical shopping mall managed by an approved `MALL_OWNER`.
 | `updatedAt` | `Date` | Auto | Auto | Enabled via `timestamps: true`. |
 
 **Indexes on `Mall`:**
-1. `{ status: 1, city: 1 }` — Optimizes public mall discovery queries (`status: "APPROVED"` filtered by `city`).
-2. `{ ownerId: 1, status: 1 }` — Optimizes Mall Owner dashboard queries.
+1. `{ status: 1, city: 1, name: 1, _id: 1 }` — Supports public mall discovery queries (`status: "APPROVED"` filtered by `city`).
+2. `{ ownerId: 1, createdAt: -1, _id: -1 }` — Supports listing an owner’s malls newest first.
 3. `{ name: 1, city: 1, address: 1 }` — `unique: true` (prevents duplicate submissions of the exact same mall name and address in the same city).
 
 ---

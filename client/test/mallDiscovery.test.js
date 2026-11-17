@@ -204,7 +204,7 @@ test("MallDiscoveryPage: renders mall listing with name, location, and action li
   );
 
   // Header & Title
-  assert.match(html, /Mall Directory &amp; Smart Parking/);
+  assert.match(html, /Where are we heading\?/);
   assert.match(html, /EXPLORE DESTINATIONS/);
 
   // Mall cards
@@ -265,9 +265,8 @@ test("MallDiscoveryPage: empty state and pending backend notice", () => {
     )
   );
 
-  assert.match(html, /Mall Directory Under Construction/);
-  assert.match(html, /Sprint 3 Notice/);
-  assert.match(html, /Shikhar - Sprint 3/);
+  assert.match(html, /Your next destination is on its way/);
+  assert.doesNotMatch(html, /role="listitem"/);
 });
 
 test("MallDiscoveryPage: renders loading skeletons when data is loading", () => {
@@ -306,7 +305,7 @@ test("MallDetailsPage: renders comprehensive mall profile and operating details"
       { name: "Basement 3 (Long-Term)", level: "B3", slots: 600 },
     ],
     amenities: ["EV Fast Charging", "Valet Parking", "Handicapped Accessibility"],
-    status: "ACTIVE",
+    status: "APPROVED",
   };
 
   const html = renderToStaticMarkup(
@@ -330,7 +329,7 @@ test("MallDetailsPage: renders comprehensive mall profile and operating details"
   // Mall branding & Header
   assert.match(html, /Phoenix Marketcity \(Kurla\)/);
   assert.match(html, /MALL PROFILE • MUMBAI/);
-  assert.match(html, /Live Partner/);
+  assert.match(html, /Approved mall/);
 
   // Overview metrics
   assert.match(html, /1800 Bays/);
@@ -354,7 +353,7 @@ test("MallDetailsPage: renders comprehensive mall profile and operating details"
 
   // Back button & Actions
   assert.match(html, /← Back to All Malls/);
-  assert.match(html, /Find &amp; Reserve Parking/);
+  assert.match(html, /View Parking Availability/);
 });
 
 test("MallDetailsPage: displays safe empty state when mall is not found", () => {
@@ -370,6 +369,6 @@ test("MallDetailsPage: displays safe empty state when mall is not found", () => 
   );
 
   assert.match(html, /Mall Profile Not Found/);
-  assert.match(html, /Sprint 3 Notice/);
-  assert.match(html, /Browse Malls Directory/);
+  assert.match(html, /mall directory is not available yet|unavailable in the public directory/);
+  assert.match(html, /Browse malls/);
 });

@@ -6,7 +6,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import LoginPage from "../src/pages/LoginPage.jsx";
 import RegisterPage from "../src/pages/RegisterPage.jsx";
-import AuthProvider from "../src/context/AuthContext.jsx";
+import { AuthContext } from "../src/context/authContextInstance.js";
 import {
   validateEmail,
   validatePassword,
@@ -23,7 +23,7 @@ function renderWithRouter(element) {
     React.createElement(
       MemoryRouter,
       null,
-      React.createElement(AuthProvider, null, element)
+      React.createElement(AuthContext.Provider, { value: { isAuthenticated: false } }, element)
     )
   );
 }
@@ -130,10 +130,6 @@ test("LoginPage rendering: branding, inputs, controls, links, and accessibility"
   // Password visibility button with ARIA label
   assert.match(html, /aria-label="Show password"/);
 
-  // Remember me checkbox
-  assert.match(html, /name="rememberMe"/);
-  assert.match(html, /Remember me/);
-
   // Forgot password link
   assert.match(html, /Forgot password\?/);
 
@@ -153,8 +149,9 @@ test("RegisterPage rendering: branding, inputs, role notice, terms, links", () =
   assert.match(html, /Create an account/);
 
   // Standard role notice (no self-assigning Admin/Guard)
-  assert.match(html, /Standard User/);
-  assert.match(html, /Driver &amp; visitor account/);
+  assert.match(html, /value="USER"/);
+  assert.match(html, /value="MALL_OWNER"/);
+  assert.doesNotMatch(html, /value="(?:ADMIN|GUARD)"/);
 
   // Form inputs
   assert.match(html, /id="register-name"/);
