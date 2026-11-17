@@ -383,3 +383,15 @@ textarea { resize: vertical; }
 .mall-detail-banner .eyebrow { color: var(--color-lime); display: block; margin-bottom: 12px; }
 
 .nav-links a.button-accent, .nav-links a.button-primary { color: white; }
+
+.inventory-workspace { border: 0; padding: 0; margin: 0; min-width: 0; }
+.inventory-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+.inventory-sidebar, .inventory-form { display: grid; gap: 14px; min-width: 0; }
+.inventory-form label { font-size: 14px; }
+.floor-rows { overflow-x: auto; display: grid; gap: 22px; padding: 5px; min-width: 0; }
+.floor-row { display: flex; gap: 8px; padding-bottom: 8px; min-width: max-content; }
+.floor-row + .floor-row { border-top: 1px dashed #8399a5; padding-top: 22px; }
+.floor-row .bay, .floor-gap { flex: 0 0 80px; width: 80px; }
+.floor-gap { min-height: 42px; border: 1px dashed #8399a5; border-radius: 7px; opacity: .45; }
+.bay-floor, .bay-map { min-width: 0; }
+.floor-gap.is-filtered { visibility: hidden; }

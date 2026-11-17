@@ -243,6 +243,27 @@ test("auth lifecycle on MongoDB", { skip: !process.env.AUTH_TEST_MONGODB_URI && 
       assert.equal((await publicRead("?city=Delhi&city=Noida")).status, 400);
       assert.equal((await (await publicRead(mall._id)).json()).data.mall.status, "APPROVED");
 
+      const inventory = `${mall._id}/inventory`;
+      const inventoryRequest = (path = "", method = "GET", body, token = ownerData.accessToken) =>
+        request(inventory + path, { area: "malls", method, body, headers: { Authorization: `Bearer ${token}` } });
+      const bay = { id: randomUUID(), code: "A01", vehicleType: "CAR" };
+      const layout = { floors: [{ name: "B1", rows: [[bay, null]] }] };
+      assert.equal((await inventoryRequest("", "GET", undefined, otherToken)).status, 404);
+      assert.equal((await inventoryRequest("/draft", "PUT", { revision: 0, layout })).status, 200);
+      assert.deepEqual((await (await publicRead(`${mall._id}/slots`)).json()).data.slots, []);
+      const duplicate = { floors: [{ name: "B1", rows: [[bay, { ...bay, id: randomUUID(), code: "a01" }]] }] };
+      assert.equal((await inventoryRequest("/published", "PUT", { revision: 1, layout: duplicate })).status, 400);
+      assert.equal((await inventoryRequest("/published", "PUT", { revision: 0, layout })).status, 409);
+      assert.equal((await inventoryRequest("/published", "PUT", { revision: 1, layout })).status, 200);
+      const publicSlots = async () => (await (await publicRead(`${mall._id}/slots`)).json()).data;
+      assert.equal((await publicSlots()).slots[0].status, "AVAILABLE");
+      assert.deepEqual((await publicSlots()).layout[0].rows, [[bay.id, null]]);
+      assert.equal((await inventoryRequest(`/bays/${bay.id}`, "PATCH", { revision: 2, status: "MAINTENANCE" })).status, 200);
+      assert.equal((await inventoryRequest("/published", "PUT", { revision: 3, layout })).status, 200);
+      assert.equal((await publicSlots()).slots[0].status, "MAINTENANCE");
+      assert.equal((await inventoryRequest(`/bays/${bay.id}`, "PATCH", { revision: 4, status: "AVAILABLE" })).status, 200);
+      assert.equal((await publicSlots()).slots[0].status, "AVAILABLE");
+
       const rejectedMall = await mallRequest("", ownerData.accessToken, { ...mallDetails, name: "Other Mall" });
       const rejectedId = (await rejectedMall.json()).data.mall._id;
       assert.equal((await review(rejectedId, { status: "REJECTED" })).status, 400);
@@ -253,6 +274,7 @@ test("auth lifecycle on MongoDB", { skip: !process.env.AUTH_TEST_MONGODB_URI && 
       assert.equal((await review(mall._id, { status: "INACTIVE" })).status, 200);
       assert.equal((await publicRead(mall._id)).status, 404);
       assert.deepEqual((await (await publicRead()).json()).data.malls, []);
+      assert.equal((await publicRead(`${mall._id}/slots`)).status, 404);
     });
 
     assert.equal((await update(ownerData.user._id, "SUSPENDED")).status, 200);

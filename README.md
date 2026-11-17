@@ -3,7 +3,7 @@
 **Smart Mall Parking Intelligence System**
 Book smarter. Enter faster. Park better.
 
-ParkEase is a mall parking management project. This repository contains the MERN foundation and authentication and owner account approval. Parking discovery, reservations, QR verification, billing, and analytics are **planned**, not implemented.
+ParkEase is a mall parking management project. This repository contains the MERN foundation and authentication and owner account approval. Approved malls support parking discovery and published bay inventory. Reservations, QR verification, billing, and analytics are planned.
 
 ## Tech stack
 
@@ -136,7 +136,8 @@ One root lockfile tracks all workspaces. For repeatable installs after cloning, 
 - `/` — responsive home page, planned feature cards, real API status.
 - `/login`, `/register` — sign in or register as a driver or mall owner.
 - `/dashboard` — requires sign-in and displays the team’s driver dashboard or the signed-in role’s account view. Admins can approve or reject pending owners and suspend active owners. Approved owners can submit mall profiles and see their status under **My malls**. Admins review pending mall profiles under **Mall submissions**.
-- `/malls`, mall details, and parking availability — discovery and profile screens show approved mall profiles. The parking availability screen awaits the inventory API.
+- Owners can open **My malls → Manage parking layout** on an approved mall, build rows, save a draft, and publish. The **Published bays** tab handles maintenance and reopening separately.
+- `/malls`, mall details, and parking availability — discovery and profile screens show approved mall profiles. Drivers can browse published floor layouts and see which bays are available or under maintenance.
 - Other browser paths — friendly not-found page.
 
 The liveness endpoint is:
