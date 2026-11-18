@@ -16,21 +16,44 @@ export default function DashboardLayout({ children }) {
   const roleLabel = roleLabels[user?.role] || "Explore ParkEase";
   const initials = user?.name?.split(" ").filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "P";
   const closeSidebar = () => setSidebarOpen(false);
-  const links = [{ label: "Overview", icon: "home", to: "/dashboard", active: onDashboard && view === "overview" }];
-  if (user?.role === "ADMIN") {
+  const links = [];
+  if (user?.role !== "GUARD") {
+    links.push({ label: "Overview", icon: "home", to: "/dashboard", active: onDashboard && view === "overview" });
+  }
+  if (user?.role === "USER") {
+    links.push(
+      { label: "Find parking", icon: "pin", to: "/malls", active: location.pathname.startsWith("/malls") },
+      { label: "My bookings", icon: "clipboard", to: "/dashboard/bookings", active: location.pathname.startsWith("/dashboard/bookings") },
+    );
+  } else if (user?.role === "ADMIN") {
     links.push(
       { label: "Mall approvals", icon: "clipboard", to: "/dashboard?view=malls", active: onDashboard && view === "malls" },
       { label: "Owner approvals", icon: "users", to: "/dashboard?view=owners", active: onDashboard && view === "owners" },
       { label: "All malls", icon: "building", to: "/dashboard?view=all-malls", active: onDashboard && view === "all-malls" },
+      { label: "Guards", icon: "users", to: "/dashboard/guards", active: location.pathname === "/dashboard/guards" },
+      { label: "Analytics", icon: "clipboard", to: "/dashboard/analytics", active: location.pathname === "/dashboard/analytics" },
     );
   } else if (user?.role === "MALL_OWNER" && user.status === "ACTIVE") {
     links.push(
-      { label: "My malls", icon: "building", to: "/dashboard?view=my-malls", active: onDashboard && view === "my-malls" },
+      { label: "My malls", icon: "building", to: "/dashboard?view=my-malls", active: (onDashboard && view === "my-malls") || location.pathname.startsWith("/dashboard/malls/") },
       { label: "Submit a mall", icon: "plus", to: "/dashboard?view=submit", active: onDashboard && view === "submit" },
+      { label: "Guards", icon: "users", to: "/dashboard/guards", active: location.pathname === "/dashboard/guards" },
+      { label: "Analytics", icon: "clipboard", to: "/dashboard/analytics", active: location.pathname === "/dashboard/analytics" },
+    );
+  } else if (user?.role === "GUARD") {
+    links.push(
+      { label: "Gate console", icon: "clipboard", to: "/dashboard/operations", active: location.pathname === "/dashboard/operations" },
+      { label: "Recent activity", icon: "home", to: "/dashboard/activity", active: location.pathname === "/dashboard/activity" },
     );
   }
-  links.push({ label: user?.role === "ADMIN" ? "Public directory" : "Find parking", icon: "pin", to: "/malls", active: location.pathname.startsWith("/malls") });
-  const currentLabel = links.find((link) => link.active)?.label || "Overview";
+  if (user) links.push({ label: "Profile", icon: "users", to: "/dashboard/profile", active: location.pathname === "/dashboard/profile" });
+  if (user?.role !== "USER" && user?.role !== "GUARD") {
+    links.push({ label: "Public directory", icon: "pin", to: "/malls", active: location.pathname.startsWith("/malls") });
+  }
+  if (!user) links.push({ label: "Find parking", icon: "pin", to: "/malls", active: location.pathname.startsWith("/malls") });
+  const currentLabel = location.pathname.includes("/inventory") ? "Parking layout"
+    : location.pathname.endsWith("/edit") ? "Edit mall"
+      : links.find((link) => link.active)?.label || "Overview";
 
   useEffect(() => {
     if (!sidebarOpen) return;
