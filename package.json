@@ -16,7 +16,8 @@
     "install-all": "npm install",
     "build": "npm run build --workspace client",
     "lint": "eslint client server",
-    "test": "npm test --workspace server"
+    "test": "npm test --workspace server",
+    "test:client": "node client/test/run-tests.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",
