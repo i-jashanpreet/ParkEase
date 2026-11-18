@@ -32,7 +32,10 @@ export default function LoginPage() {
   // If already authenticated, redirect to target or dashboard
   useEffect(() => {
     if (isAuthenticated) {
-      const destination = location.state?.from?.pathname || "/dashboard";
+      const from = location.state?.from;
+      const destination = from
+        ? `${from.pathname}${from.search || ""}${from.hash || ""}`
+        : "/dashboard";
       navigate(destination, { replace: true });
     }
   }, [isAuthenticated, location.state, navigate]);
@@ -71,7 +74,10 @@ export default function LoginPage() {
     setIsLoading(true);
     try {
       await login({ email: formData.email, password: formData.password });
-      const destination = location.state?.from?.pathname || "/dashboard";
+      const from = location.state?.from;
+      const destination = from
+        ? `${from.pathname}${from.search || ""}${from.hash || ""}`
+        : "/dashboard";
       navigate(destination, { replace: true });
     } catch (err) {
       if (err.status === 404) {
