@@ -16,6 +16,7 @@ import LoginPage from "./pages/LoginPage.jsx";
 import RegisterPage from "./pages/RegisterPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import NotFoundPage from "./pages/NotFoundPage.jsx";
+import PendingPage from "./pages/PendingPage.jsx";
 
 function RoleDashboard() {
   const { user } = useAuth();
@@ -59,7 +60,26 @@ export default function App() {
           }
         >
           <Route path="/dashboard" element={<RoleDashboard />} />
-          <Route path="/dashboard/malls/:id/inventory" element={<MallPage Component={InventoryPage} />} />
+          <Route element={<ProtectedRoute allowedRoles={[ROLES.MALL_OWNER, ROLES.ADMIN]} />}>
+            <Route path="/dashboard/malls/:id/inventory" element={<MallPage Component={InventoryPage} />} />
+          </Route>
+          <Route element={<ProtectedRoute allowedRoles={[ROLES.USER]} />}>
+            <Route path="/dashboard/bookings" element={<PendingPage title="My bookings" description="The dedicated bookings page is being built. Your current bookings are still available on the overview." to="/dashboard#recent-bookings-section" action="View bookings on overview" />} />
+            <Route path="/dashboard/bookings/:id" element={<PendingPage title="Booking details" description="The booking detail page is being built." />} />
+            <Route path="/dashboard/bookings/:id/bill" element={<PendingPage title="Booking receipt" description="Final receipts will be available after the booking and billing service is ready." />} />
+          </Route>
+          <Route element={<ProtectedRoute allowedRoles={[ROLES.MALL_OWNER, ROLES.ADMIN]} />}>
+            <Route path="/dashboard/guards" element={<PendingPage title="Guards" description="Guard management is being built." />} />
+            <Route path="/dashboard/analytics" element={<PendingPage title="Analytics" description="Reporting will be available when the analytics service is ready." />} />
+          </Route>
+          <Route element={<ProtectedRoute allowedRoles={[ROLES.MALL_OWNER]} />}>
+            <Route path="/dashboard/malls/:id/edit" element={<PendingPage title="Edit mall" description="Mall profile editing is being built. You can still manage the parking layout from My malls." to="/dashboard?view=my-malls" action="Go to My malls" />} />
+          </Route>
+          <Route element={<ProtectedRoute allowedRoles={[ROLES.GUARD]} />}>
+            <Route path="/dashboard/operations" element={<PendingPage title="Gate console" description="Gate operations are being built. An assigned guard will be able to scan passes here." />} />
+            <Route path="/dashboard/activity" element={<PendingPage title="Recent activity" description="Gate activity will appear here when operations are available." />} />
+          </Route>
+          <Route path="/dashboard/profile" element={<PendingPage title="Profile" description="Profile editing is being built. Your account details are available in the navigation." />} />
         </Route>
       </Routes>
     </AuthProvider>
