@@ -1,6 +1,9 @@
+import mongoose from "mongoose";
 import { Router } from "express";
 import authenticate from "../middleware/authenticate.js";
 import { requireApprovedOwner } from "../middleware/authorize.js";
+import Booking from "../models/Booking.js";
+import { bookingWindow, checkOperatingHours, overlappingBookings } from "../utils/bookingWindow.js";
 import Mall from "../models/Mall.js";
 import AppError from "../utils/AppError.js";
 import { validateObjectId } from "../utils/validators.js";
@@ -84,9 +87,31 @@ async function update(req, res, changes) {
     ...req.mallFilter,
     parkingRevision: req.mall.parkingRevision === undefined ? { $exists: false } : revision,
   };
-  const mall = await Mall.findOneAndUpdate(filter, { $set: { ...changes, parkingRevision: revision + 1 } }, { new: true })
-    .select(fields).lean();
-  if (!mall) throw new AppError(409, "Inventory changed. Reload before trying again.", "LAYOUT_CONFLICT");
+  async function write(session) {
+    const mall = await Mall.findOneAndUpdate(filter, { $set: { ...changes, parkingRevision: revision + 1 } }, { new: true, session })
+      .select(fields).lean();
+    if (!mall) throw new AppError(409, "Inventory changed. Reload before trying again.", "LAYOUT_CONFLICT");
+    if (changes.parkingPublished) {
+      const before = new Map((req.mall.parkingPublished?.floors ?? []).flatMap((floor) =>
+        floor.rows.flat().filter(Boolean).map((bay) => [bay.id, { ...bay, floor: floor.name }])));
+      for (const floor of changes.parkingPublished.floors) {
+        for (const bay of floor.rows.flat().filter(Boolean)) {
+          const old = before.get(bay.id);
+          if (old && old.code === bay.code && old.floor === floor.name &&
+              old.vehicleType === bay.vehicleType && (old.status === bay.status ||
+              (old.status === "MAINTENANCE" && bay.status === "AVAILABLE"))) before.delete(bay.id);
+        }
+      }
+      if (before.size && await Booking.exists({
+        mallId: mall._id, status: "CONFIRMED", endTime: { $gt: new Date() },
+        bayId: { $in: [...before.keys()] },
+      }).session(session)) {
+        throw new AppError(409, "This change affects a bay with an active or upcoming reservation.", "BAY_HAS_RESERVATIONS");
+      }
+    }
+    return mall;
+  }
+  const mall = changes.parkingPublished ? await mongoose.connection.transaction(write) : await write();
   respond(res, ownerView(mall));
 }
 
@@ -124,15 +149,19 @@ router.patch("/:mallId/inventory/bays/:bayId", ...owner, async (req, res) => {
 
 router.get("/:mallId/slots", async (req, res) => {
   const id = validateObjectId(req.params.mallId, "mallId");
-  const mall = await Mall.findOne({ _id: id, status: "APPROVED" }).select("hourlyRatePaise +parkingPublished").lean();
+  const mall = await Mall.findOne({ _id: id, status: "APPROVED" }).select("openingTime closingTime hourlyRatePaise +parkingPublished").lean();
   if (!mall) throw new AppError(404, "Mall not found", "MALL_NOT_FOUND");
+  const window = req.query.startTime !== undefined || req.query.endTime !== undefined ? bookingWindow(req.query) : null;
+  if (window) checkOperatingHours(mall, window);
+  const now = new Date();
+  const reserved = new Set(await Booking.distinct("bayId", overlappingBookings(id, window ?? { startTime: now, endTime: now })));
   const floors = mall.parkingPublished?.floors ?? [];
   const slots = floors.flatMap((floor) => floor.rows.flat().filter(Boolean).map((bay) => ({
     id: bay.id,
     slotNumber: bay.code,
     floor: floor.name,
     vehicleType: bay.vehicleType,
-    status: bay.status,
+    status: bay.status === "AVAILABLE" && reserved.has(bay.id) ? "RESERVED" : bay.status,
     isElectric: bay.electric,
     isAccessible: bay.accessible,
     hourlyRate: mall.hourlyRatePaise / 100,

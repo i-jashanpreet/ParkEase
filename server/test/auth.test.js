@@ -7,6 +7,7 @@ import { once } from "node:events";
 import test from "node:test";
 import mongoose from "mongoose";
 import app from "../src/app.js";
+import Booking from "../src/models/Booking.js";
 import Mall from "../src/models/Mall.js";
 import User from "../src/models/User.js";
 import RefreshToken from "../src/models/RefreshToken.js";
@@ -50,7 +51,7 @@ test("auth lifecycle on MongoDB", { skip: !process.env.AUTH_TEST_MONGODB_URI && 
       await mongoose.disconnect();
     }
   });
-  await Promise.all([User.init(), RefreshToken.init(), Mall.init()]);
+  await Promise.all([User.init(), RefreshToken.init(), Mall.init(), Booking.init()]);
   const request = await serve(t);
   const register = (body) => request("register", { body });
   const login = (body = account) => request("login", { body, headers: { "User-Agent": "integration-test" } });
@@ -263,6 +264,41 @@ test("auth lifecycle on MongoDB", { skip: !process.env.AUTH_TEST_MONGODB_URI && 
       assert.equal((await publicSlots()).slots[0].status, "MAINTENANCE");
       assert.equal((await inventoryRequest(`/bays/${bay.id}`, "PATCH", { revision: 4, status: "AVAILABLE" })).status, 200);
       assert.equal((await publicSlots()).slots[0].status, "AVAILABLE");
+
+      const date = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+      const timestamp = (time) => new Date(`${date}T${time}:00+05:30`).toISOString();
+      const window = { startTime: timestamp("11:00"), endTime: timestamp("12:30") };
+      const book = (path, method, body, token = data.accessToken) => request(path, {
+        area: "bookings", method, body, headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = { ...window, mallId: mall._id, bayId: bay.id, vehicleType: "CAR", vehicleNumber: "up32 ab 1234" };
+      assert.equal((await book("", "POST", body, ownerData.accessToken)).status, 403);
+      assert.equal((await book("", "POST", { ...body, vehicleType: "BIKE" })).status, 409);
+      assert.equal((await book("", "POST", { ...body, startTime: timestamp("06:00"), endTime: timestamp("07:00") })).status, 400);
+      const attempts = await Promise.all([book("", "POST", body), book("", "POST", body)]);
+      assert.deepEqual(attempts.map((response) => response.status).sort(), [201, 409]);
+      const { booking } = (await attempts.find((response) => response.status === 201).json()).data;
+      assert.equal(booking.totalAmountPaise, 7575);
+      assert.equal(booking.vehicleNumber, "UP32 AB 1234");
+      assert.equal(booking.canCancel, true);
+      const timeLookup = `${mall._id}/slots?${new URLSearchParams(window)}`;
+      const reservedSlot = (await (await publicRead(timeLookup)).json()).data.slots[0];
+      assert.equal(reservedSlot.status, "RESERVED");
+      assert.equal(reservedSlot.vehicleNumber, undefined);
+      assert.equal((await publicSlots()).slots[0].status, "AVAILABLE");
+      assert.equal((await inventoryRequest(`/bays/${bay.id}`, "PATCH", { revision: 5, status: "MAINTENANCE" })).status, 409);
+      const adjacent = await book("", "POST", { ...body, startTime: timestamp("12:30"), endTime: timestamp("13:30") });
+      assert.equal(adjacent.status, 201);
+      const adjacentId = (await adjacent.json()).data.booking._id;
+      assert.equal((await (await book("", "GET")).json()).data.bookings.length, 2);
+      const secondDriver = await register({ ...account, email: "other-driver@example.test" });
+      const secondDriverToken = (await secondDriver.json()).data.accessToken;
+      assert.deepEqual((await (await book("", "GET", undefined, secondDriverToken)).json()).data.bookings, []);
+      assert.equal((await book(`${booking._id}/cancel`, "PATCH", undefined, secondDriverToken)).status, 404);
+      assert.equal((await book(`${booking._id}/cancel`, "PATCH")).status, 200);
+      assert.equal((await book(`${booking._id}/cancel`, "PATCH")).status, 200);
+      assert.equal((await (await publicRead(timeLookup)).json()).data.slots[0].status, "AVAILABLE");
+      assert.equal((await book(`${adjacentId}/cancel`, "PATCH")).status, 200);
 
       const rejectedMall = await mallRequest("", ownerData.accessToken, { ...mallDetails, name: "Other Mall" });
       const rejectedId = (await rejectedMall.json()).data.mall._id;

@@ -4,6 +4,7 @@ import { MALL_STATUS } from "../constants/statuses.js";
 const timePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
 const mallSchema = new mongoose.Schema({
+  bookingSequence: { type: Number, select: false },
   parkingDraft: { type: mongoose.Schema.Types.Mixed, select: false },
   parkingPublished: { type: mongoose.Schema.Types.Mixed, select: false },
   parkingRevision: { type: Number, select: false },

@@ -395,3 +395,15 @@ textarea { resize: vertical; }
 .floor-gap { min-height: 42px; border: 1px dashed #8399a5; border-radius: 7px; opacity: .45; }
 .bay-floor, .bay-map { min-width: 0; }
 .floor-gap.is-filtered { visibility: hidden; }
+
+.reservation-window-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 0; font-size: 13px; }
+.reservation-toolbar .parking-filter-bar { display: flex; flex-wrap: wrap; }
+.reservation-toolbar .form-group { flex: 1 1 130px; min-width: 0; }
+.reservation-confirmation { background: var(--color-lime-soft); border: 1px solid #d5e6ac; padding: 18px; border-radius: 14px; display: grid; gap: 8px; justify-items: start; overflow-wrap: anywhere; }
+.reservation-sheet .detail-list dd { overflow-wrap: anywhere; }
+@media (max-width: 768px) {
+  .reservation-toolbar .parking-filter-bar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .reservation-toolbar .parking-filter-bar > button { grid-column: 1 / -1; }
+  .reservation-sheet.modal-backdrop, .modal-backdrop:has(.reservation-sheet) { align-items: flex-end; padding: 0; }
+  .reservation-sheet.modal-container, .modal-backdrop:has(.reservation-sheet) .modal-container { width: 100%; max-width: none; border-radius: 20px 20px 0 0; }
+}

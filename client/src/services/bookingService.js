@@ -1,23 +1,6 @@
 import { sessionRequest } from "./authService.js";
 
-/**
- * Booking & Verification Service (Sprint 4 Milestone)
- *
- * BACKEND STATUS: PENDING IMPLEMENTATION
- * Live backend endpoints are currently pending implementation by Shikhar & Mehak (Sprint 4):
- * - POST /api/bookings (Create atomic booking reservation)
- * - GET /api/bookings (List user bookings)
- * - GET /api/bookings/:id (Booking details)
- * - PATCH /api/bookings/:id/cancel (Cancel booking)
- * - POST /api/bookings/verify-qr (Guard QR scan verification)
- *
- * Safe absence handling:
- * Unconfirmed endpoints are handled safely. If backend booking endpoints return 404 or
- * are pending, the service returns safe defaults ({ bookings: [], stats: ... }) or surfaces
- * status for friendly UI empty/unavailable states without fake data.
- */
-
-export const BOOKING_SERVICE_STATUS = "PENDING_BACKEND_IMPLEMENTATION";
+export const BOOKING_SERVICE_STATUS = "RESERVATIONS_AVAILABLE";
 
 export const PENDING_BOOKING_ROUTES = Object.freeze({
   CREATE_BOOKING: "/bookings",
@@ -27,7 +10,7 @@ export const PENDING_BOOKING_ROUTES = Object.freeze({
   VERIFY_QR: "/bookings/verify-qr",
 });
 
-let bookingApiConfirmed = false;
+let bookingApiConfirmed = true;
 
 export function isBookingApiAvailable() {
   return bookingApiConfirmed;
@@ -48,23 +31,20 @@ export function normalizeBookingsResponse(response) {
     };
   }
 
-  const rawList = Array.isArray(response)
-    ? response
-    : Array.isArray(response.data)
-      ? response.data
-      : Array.isArray(response.bookings)
-        ? response.bookings
-        : [];
+  const rawList = [response, response.data?.bookings, response.data, response.bookings]
+    .find(Array.isArray) ?? [];
 
   const bookings = rawList.map((item) => ({
     id: item._id || item.id || `b_${Math.random().toString(36).substr(2, 9)}`,
+    mallId: item.mallId,
+    canCancel: item.canCancel === true,
     mallName: item.mallName || item.mall?.name || "ParkEase Partner Mall",
     slotCode: item.slotCode || item.slot?.code || "Bay --",
     floor: item.floor || item.slot?.floor || "Level --",
     status: (item.status || "CONFIRMED").toUpperCase(),
     startTime: item.startTime || item.createdAt || new Date().toISOString(),
     endTime: item.endTime || null,
-    totalAmount: typeof item.totalAmount === "number" ? item.totalAmount : item.amount || 0,
+    totalAmount: typeof item.totalAmountPaise === "number" ? item.totalAmountPaise / 100 : item.totalAmount ?? item.amount ?? 0,
     vehicleNumber: item.vehicleNumber || item.licensePlate || "N/A",
     qrCode: item.qrCode || null,
   }));
@@ -72,7 +52,7 @@ export function normalizeBookingsResponse(response) {
   const stats = {
     total: bookings.length,
     active: bookings.filter((b) => ["ACTIVE", "CONFIRMED", "IN_PROGRESS"].includes(b.status)).length,
-    completed: bookings.filter((b) => b.status === "COMPLETED").length,
+    completed: bookings.filter((b) => ["COMPLETED", "ENDED"].includes(b.status)).length,
     cancelled: bookings.filter((b) => b.status === "CANCELLED").length,
   };
 
@@ -118,3 +98,13 @@ const bookingService = {
 };
 
 export default bookingService;
+
+export async function createBooking(body) {
+  const { data } = await sessionRequest("/bookings", { method: "POST", body });
+  return normalizeBookingsResponse([data.booking]).bookings[0];
+}
+
+export async function cancelBooking(id) {
+  const { data } = await sessionRequest(`/bookings/${id}/cancel`, { method: "PATCH" });
+  return normalizeBookingsResponse([data.booking]).bookings[0];
+}
