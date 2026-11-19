@@ -1,4 +1,5 @@
 import AppError from "./AppError.js";
+import { entryGraceMinutes } from "../services/bookingLifecycle.js";
 
 const minute = 60_000;
 const indiaOffset = 330 * minute;
@@ -39,6 +40,20 @@ export function checkOperatingHours(mall, { startTime, endTime }) {
   }
 }
 
-export function overlappingBookings(mallId, { startTime, endTime }) {
-  return { mallId, status: "CONFIRMED", startTime: { $lt: endTime }, endTime: { $gt: startTime } };
+// A delayed worker must not keep an unentered bay reserved past its logical deadline.
+// Legacy bookings without entryDeadline use the same grace policy as migration.
+export function liveConfirmedBookings(now = new Date()) {
+  return { status: "CONFIRMED", $or: [
+    { entryDeadline: { $gt: now } },
+    { entryDeadline: null, $expr: { $gt: [
+      { $min: [{ $add: ["$startTime", entryGraceMinutes() * minute] }, "$endTime"] }, now,
+    ] } },
+  ] };
+}
+
+export function overlappingBookings(mallId, { startTime, endTime }, now = new Date()) {
+  return { mallId, $or: [
+    { ...liveConfirmedBookings(now), startTime: { $lt: endTime }, endTime: { $gt: startTime } },
+    { status: "ACTIVE" },
+  ] };
 }
