@@ -64,7 +64,7 @@ export default function App() {
             <Route path="/dashboard/malls/:id/inventory" element={<MallPage Component={InventoryPage} />} />
           </Route>
           <Route element={<ProtectedRoute allowedRoles={[ROLES.USER]} />}>
-            <Route path="/dashboard/bookings" element={<PendingPage title="My bookings" description="The dedicated bookings page is being built. Your current bookings are still available on the overview." to="/dashboard#recent-bookings-section" action="View bookings on overview" />} />
+            <Route path="/dashboard/bookings" element={<DashboardPage bookingsOnly />} />
             <Route path="/dashboard/bookings/:id" element={<PendingPage title="Booking details" description="The booking detail page is being built." />} />
             <Route path="/dashboard/bookings/:id/bill" element={<PendingPage title="Booking receipt" description="Final receipts will be available after the booking and billing service is ready." />} />
           </Route>

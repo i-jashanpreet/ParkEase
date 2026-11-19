@@ -4,11 +4,11 @@ import authRoutes from "./authRoutes.js";
 import adminRoutes from "./adminRoutes.js";
 import mallRoutes from "./mallRoutes.js";
 import inventoryRoutes from "./inventoryRoutes.js";
-
+import bookingRoutes from "./bookingRoutes.js";
 const router = Router();
 router.use("/health", healthRoutes);
 router.use("/auth", authRoutes);
 router.use("/admin", adminRoutes);
+router.use("/bookings", bookingRoutes);
 router.use("/malls", inventoryRoutes, mallRoutes);
-
 export default router;

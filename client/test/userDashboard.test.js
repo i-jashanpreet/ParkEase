@@ -149,7 +149,7 @@ test("DashboardPage: summary metric cards render Total, Active, and Completed Bo
   // Summary cards
   assert.match(html, /Total Bookings/);
   assert.match(html, /Active Bookings/);
-  assert.match(html, /Completed Bookings/);
+  assert.match(html, /Past Reservations/);
   assert.match(html, /Parking summary statistics/);
 });
 
@@ -173,7 +173,7 @@ test("DashboardPage: quick action cards render Find Parking and My Bookings", ()
 
   // My Bookings quick action
   assert.match(html, /My Bookings/);
-  assert.match(html, /View Reservations/);
+  assert.match(html, /href="\/dashboard\/bookings"/);
 });
 
 test("DashboardPage: empty and pending backend states without fake data", () => {
@@ -192,7 +192,7 @@ test("DashboardPage: empty and pending backend states without fake data", () => 
 
   // Empty state title & description
   assert.match(html, /No Parking Reservations Found/);
-  assert.match(html, /Your parking visits will appear here/);
+  assert.match(html, /Choose a mall, time window, and bay/);
   assert.match(html, /Find Parking Now/);
   assert.match(html, /Reservations are coming next/);
 });
@@ -238,7 +238,7 @@ test("DashboardPage: populated bookings list renders booking cards, status, vehi
   assert.match(html, /Phoenix Marketcity \(Kurla\)/);
   assert.match(html, /Bay B1-14/);
   assert.match(html, /MH 01 AB 9999/);
-  assert.match(html, /QR Pass ↗/);
+  assert.match(html, /View reservation/);
   assert.match(html, /R City Mall \(Ghatkopar\)/);
   assert.match(html, /COMPLETED/);
 });

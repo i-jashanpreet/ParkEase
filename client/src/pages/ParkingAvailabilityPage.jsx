@@ -1,8 +1,13 @@
-import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useContext, useEffect, useState } from "react";
+import { useLocation, useParams } from "react-router-dom";
 import FloorRows from "../components/FloorRows.jsx";
 import Button from "../components/Button.jsx";
-import Badge from "../components/Badge.jsx";
+import BookingWindowForm from "../components/BookingWindowForm.jsx";
+import ReservationDetails from "../components/ReservationDetails.jsx";
+import Modal from "../components/Modal.jsx";
+import { AuthContext } from "../context/authContextInstance.js";
+import { createBooking } from "../services/bookingService.js";
+import { formatBookingTime, formatRupees } from "../utils/bookingDisplay.js";
 import EmptyState from "../components/EmptyState.jsx";
 import ErrorMessage from "../components/ErrorMessage.jsx";
 import Icon from "../components/Icon.jsx";
@@ -17,6 +22,8 @@ import { getParkingAvailability, SLOT_STATUS } from "../services/parkingService.
 
 export default function ParkingAvailabilityPage({ initialMall = null, initialData = null, initialLoading } = {}) {
   const { id } = useParams();
+  const location = useLocation();
+  const auth = useContext(AuthContext);
   const mallId = id || initialMall?.id || initialMall?._id;
   const [mall, setMall] = useState(initialMall);
   const [data, setData] = useState(initialData);
@@ -28,15 +35,25 @@ export default function ParkingAvailabilityPage({ initialMall = null, initialDat
   const [status, setStatus] = useState("ALL");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState(null);
+  const [window, setWindow] = useState(null);
+  const [plate, setPlate] = useState("");
+  const [booking, setBooking] = useState(null);
+  const [bookingError, setBookingError] = useState("");
+  const [bookingBusy, setBookingBusy] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   useEffect(() => {
     if (initialData && revision === 0) return;
-    let cancelled = false;
-    Promise.all([initialMall ? Promise.resolve({ mall: initialMall }) : getMallById(mallId), getParkingAvailability(mallId)])
-      .then(([mallResult, parkingResult]) => { if (!cancelled) { setMall(mallResult.mall); setData(parkingResult); } })
-      .catch((err) => { if (!cancelled) setError(err.message); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [mallId, initialMall, initialData, revision]);
+    const controller = new AbortController();
+    const params = window ? { startTime: window.startTime, endTime: window.endTime } : {};
+    Promise.all([
+      initialMall ? Promise.resolve({ mall: initialMall }) : getMallById(mallId, { signal: controller.signal }),
+      getParkingAvailability(mallId, params, { signal: controller.signal }),
+    ])
+      .then(([mallResult, parkingResult]) => { if (!controller.signal.aborted) { setMall(mallResult.mall); setData(parkingResult); } })
+      .catch((err) => { if (!controller.signal.aborted) setError(err.message); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [mallId, initialMall, initialData, revision, window]);
   const slots = data?.slots || [];
   const floors = data?.supportedFloors || [];
   const vehicles = data?.supportedVehicleTypes || [];
@@ -52,12 +69,70 @@ export default function ParkingAvailabilityPage({ initialMall = null, initialDat
   const filteredView = floor !== "ALL" || vehicle !== "ALL" || status !== "ALL" || search;
   const reset = () => { setFloor("ALL"); setVehicle("ALL"); setStatus("ALL"); setSearch(""); };
   const retry = () => { setError(""); setLoading(true); setRevision((value) => value + 1); };
+  function checkWindow(nextWindow, vehicleType) {
+    setWindow(nextWindow ? { ...nextWindow, vehicleType } : null);
+    setVehicle(vehicleType ?? "ALL");
+    setStatus("ALL");
+    setSelectedId(null);
+    setDetailsOpen(false);
+    setBookingError("");
+    retry();
+  }
+
+  function selectBay(bay) {
+    setSelectedId(bay.id || bay.slotNumber);
+    setBookingError("");
+    setDetailsOpen(globalThis.matchMedia?.("(max-width: 768px)").matches ?? false);
+  }
+
+  async function reserve(event) {
+    event.preventDefault();
+    if (bookingBusy || loading || !window || selected?.status !== "AVAILABLE") return;
+    setBookingBusy(true);
+    setBookingError("");
+    try {
+      const confirmed = await createBooking({ ...window, mallId, bayId: selected.id, vehicleNumber: plate });
+      setBooking(confirmed);
+      setSelectedId(null);
+      setDetailsOpen(false);
+      retry();
+    } catch (err) {
+      setBookingError(err.message);
+      if (err.status === 409) {
+        setSelectedId(null);
+        setDetailsOpen(false);
+        retry();
+      }
+    } finally {
+      setBookingBusy(false);
+    }
+  }
+
+  const details = <ReservationDetails bay={selected} window={window} plate={plate} onPlate={setPlate}
+    busy={bookingBusy} loading={loading || auth?.isLoading} role={auth?.user?.role}
+    loginTo="/login" loginFrom={location} onReserve={reserve}
+    onClear={() => { setSelectedId(null); setDetailsOpen(false); }} />;
   const renderBay = (bay) => (
-    <button key={bay.id || bay.slotNumber} type="button" className={`bay status-${bay.status.toLowerCase()} ${selected === bay ? "is-selected" : ""}`} aria-label={`Slot ${bay.slotNumber}, Floor ${bay.floor}, Status ${bay.status}`} aria-pressed={selected === bay} onClick={() => setSelectedId(bay.id || bay.slotNumber)}><strong>{bay.slotNumber}</strong><Icon name={bay.status === SLOT_STATUS.OCCUPIED ? "car" : selected === bay ? "check" : "building"} size={26} /><span>{bay.status.toLowerCase()}</span>{bay.isElectric && <small>EV</small>}{bay.isAccessible && <small>Accessible</small>}</button>
+    <button key={bay.id || bay.slotNumber} type="button" className={`bay status-${bay.status.toLowerCase()} ${selected === bay ? "is-selected" : ""}`} aria-label={`Slot ${bay.slotNumber}, Floor ${bay.floor}, Status ${bay.status}`} aria-pressed={selected === bay} onClick={() => selectBay(bay)} disabled={bookingBusy}><strong>{bay.slotNumber}</strong><Icon name={bay.status === SLOT_STATUS.OCCUPIED ? "car" : selected === bay ? "check" : "building"} size={26} /><span>{bay.status.toLowerCase()}</span>{bay.isElectric && <small>EV</small>}{bay.isAccessible && <small>Accessible</small>}</button>
   );
   return <PageContainer><div className="parking-availability-layout">
-    <div className="mall-details-topbar"><Button to={mallId ? `/malls/${mallId}` : "/malls"} variant="ghost" size="sm">← Back to Mall Details</Button><Button variant="outline" size="sm" loading={loading} onClick={retry}>Refresh availability</Button></div>
+    <div className="mall-details-topbar">
+      <Button to={mallId ? `/malls/${mallId}` : "/malls"} variant="ghost" size="sm">← Back to Mall Details</Button>
+      <div className="page-actions">
+        {auth?.user?.role === "USER" && <Button to="/dashboard/bookings" variant="outline" size="sm" icon={<Icon name="clipboard" size={16} />}>My bookings</Button>}
+        <Button variant="outline" size="sm" loading={loading} disabled={bookingBusy} onClick={retry}>Refresh availability</Button>
+      </div>
+    </div>
     <PageHeader title="Your spot. Your way." description={mall ? `${mall.name} · ${mall.address || mall.city || ""}` : "Explore parking bays and floor availability."} />
+    {(mall || mallId) && <BookingWindowForm activeWindow={window} loading={loading} busy={bookingBusy}
+      onCheck={checkWindow} onClear={() => checkWindow(null)} />}
+    {booking && <section className="reservation-confirmation" aria-label="Reservation confirmed">
+      <h2>Reservation confirmed</h2>
+      <p>{booking.slotCode} · {booking.floor} · {formatBookingTime(booking.startTime)} to {formatBookingTime(booking.endTime)} IST</p>
+      <p>Reference <strong>{booking.id.toUpperCase()}</strong> · Estimated total {formatRupees(booking.totalAmount)}</p>
+      <Button to="/dashboard/bookings" variant="outline">My bookings</Button>
+    </section>}
+    {bookingError && !detailsOpen && <ErrorMessage message={bookingError} />}
     {error && <ErrorMessage title="Unable to load parking" message={error} onRetry={retry} />}
     {loading && <div aria-busy="true" aria-label="Loading parking availability"><Skeleton height="320px" /></div>}
     {!loading && !error && <>
@@ -84,8 +159,13 @@ export default function ParkingAvailabilityPage({ initialMall = null, initialDat
           })}</div> : <EmptyState title="No Matching Parking Slots" description="Try changing the floor, vehicle type or status filters." action={<Button onClick={reset}>Reset All Filters</Button>} />}
           <div className="map-legend"><span><i />Available</span><span><i className="occupied" />Occupied</span><span><i className="selected" />Selected</span><span><i className="reserved" />Reserved</span><span><i className="maintenance" />Maintenance</span></div>
           <p className="panel-hint">Bays grouped by floor. This is a schematic view, not a navigation map.</p>
-        </section><aside className="bay-detail-panel"><span className="eyebrow">{selected ? "YOUR SELECTED BAY" : "TAKE A CLOSER LOOK"}</span>{selected ? <><h2>{selected.slotNumber}</h2><Badge variant={selected.status === "AVAILABLE" ? "success" : "neutral"}>{selected.status}</Badge><dl className="detail-list"><div><dt>Floor</dt><dd>{selected.floor || "General Level"}</dd></div><div><dt>Vehicle</dt><dd>{selected.vehicleType}</dd></div>{typeof selected.hourlyRate === "number" && <div><dt>Hourly rate</dt><dd>₹{selected.hourlyRate}/hr</dd></div>}{selected.isElectric && <div><dt>Charging</dt><dd>EV available</dd></div>}{selected.isAccessible && <div><dt>Access</dt><dd>Accessible bay</dd></div>}</dl><Button variant="outline" size="sm" onClick={() => setSelectedId(null)}>Clear selection</Button></> : <><div className="bay-detail-icon"><Icon name="car" size={42} /></div><h2>A space for your visit.</h2><p>Select a bay to see its status, vehicle type, and available facilities.</p></>}<div className="coming-soon-note"><Icon name="clock" size={18} /><div><strong>Reservations are coming next</strong><p>Bay selection is for viewing details. Booking is not available yet.</p></div></div></aside></div>
+        </section><aside className="bay-detail-panel">{!detailsOpen && details}</aside></div>
       </> : <EmptyState icon={<Icon name="car" size={32} />} title="Parking Availability Unavailable" description={data?.isPendingBackend ? "Parking availability is not connected yet. You can still explore this mall's location, hours and parking rate." : "No parking slots are currently registered for this mall facility."} action={<Button to={mallId ? `/malls/${mallId}` : "/malls"} variant="outline">Return to Mall Profile</Button>} />}
     </>}
+    <Modal isOpen={detailsOpen && Boolean(selected)} onClose={() => { if (!bookingBusy) setDetailsOpen(false); }}
+      title="Your reservation" size="sm" className="reservation-sheet">
+      {bookingError && <ErrorMessage message={bookingError} />}
+      {details}
+    </Modal>
   </div></PageContainer>;
 }
