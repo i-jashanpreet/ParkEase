@@ -54,7 +54,7 @@ test("Serializes concurrent refresh and retries protected requests", async () =>
     if (url.endsWith("/auth/login")) return response({ data: { user, accessToken: "old-token" } });
     if (url.endsWith("/auth/refresh")) {
       refreshCalls += 1;
-      await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 0));
       return response({ data: { user, accessToken: "new-token" } });
     }
     if (options.headers.Authorization === "Bearer old-token") {

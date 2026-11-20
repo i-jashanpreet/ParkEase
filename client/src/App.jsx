@@ -17,6 +17,7 @@ import RegisterPage from "./pages/RegisterPage.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import NotFoundPage from "./pages/NotFoundPage.jsx";
 import PendingPage from "./pages/PendingPage.jsx";
+import BookingDetailPage from "./pages/BookingDetailPage.jsx";
 
 function RoleDashboard() {
   const { user } = useAuth();
@@ -65,7 +66,7 @@ export default function App() {
           </Route>
           <Route element={<ProtectedRoute allowedRoles={[ROLES.USER]} />}>
             <Route path="/dashboard/bookings" element={<DashboardPage bookingsOnly />} />
-            <Route path="/dashboard/bookings/:id" element={<PendingPage title="Booking details" description="The booking detail page is being built." />} />
+            <Route path="/dashboard/bookings/:id" element={<BookingDetailPage />} />
             <Route path="/dashboard/bookings/:id/bill" element={<PendingPage title="Booking receipt" description="Final receipts will be available after the booking and billing service is ready." />} />
           </Route>
           <Route element={<ProtectedRoute allowedRoles={[ROLES.MALL_OWNER, ROLES.ADMIN]} />}>

@@ -373,6 +373,7 @@ export default function DashboardPage({
                     </div>
 
                     <div className="booking-actions-group">
+                      {booking.id && <Button to={`/dashboard/bookings/${booking.id}`} variant="outline" size="sm">Open details</Button>}
                       <Button
                         variant="outline"
                         size="sm"

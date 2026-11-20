@@ -7,7 +7,7 @@ export const PENDING_BOOKING_ROUTES = Object.freeze({
   LIST_BOOKINGS: "/bookings",
   GET_BOOKING: "/bookings/:id",
   CANCEL_BOOKING: "/bookings/:id/cancel",
-  VERIFY_QR: "/bookings/verify-qr",
+  VERIFY_QR: "/qr/verify",
 });
 
 let bookingApiConfirmed = true;
@@ -35,25 +35,32 @@ export function normalizeBookingsResponse(response) {
     .find(Array.isArray) ?? [];
 
   const bookings = rawList.map((item) => ({
-    id: item._id || item.id || `b_${Math.random().toString(36).substr(2, 9)}`,
+    id: item._id || item.id,
     mallId: item.mallId,
     canCancel: item.canCancel === true,
     mallName: item.mallName || item.mall?.name || "ParkEase Partner Mall",
     slotCode: item.slotCode || item.slot?.code || "Bay --",
     floor: item.floor || item.slot?.floor || "Level --",
     status: (item.status || "CONFIRMED").toUpperCase(),
-    startTime: item.startTime || item.createdAt || new Date().toISOString(),
+    startTime: item.startTime || null,
     endTime: item.endTime || null,
     totalAmount: typeof item.totalAmountPaise === "number" ? item.totalAmountPaise / 100 : item.totalAmount ?? item.amount ?? 0,
     vehicleNumber: item.vehicleNumber || item.licensePlate || "N/A",
     qrCode: item.qrCode || null,
+    entryDeadline: item.entryDeadline || null,
+    enteredAt: item.enteredAt || null,
+    exitedAt: item.exitedAt || null,
+    billAvailable: item.billAvailable === true,
+    qrEligibility: item.qrEligibility || null,
+    vehicleType: item.vehicleType || null,
   }));
 
   const stats = {
     total: bookings.length,
     active: bookings.filter((b) => ["ACTIVE", "CONFIRMED", "IN_PROGRESS"].includes(b.status)).length,
-    completed: bookings.filter((b) => ["COMPLETED", "ENDED"].includes(b.status)).length,
+    completed: bookings.filter((b) => b.status === "COMPLETED").length,
     cancelled: bookings.filter((b) => b.status === "CANCELLED").length,
+    expired: bookings.filter((b) => b.status === "EXPIRED").length,
   };
 
   return { bookings, stats };
@@ -107,4 +114,19 @@ export async function createBooking(body) {
 export async function cancelBooking(id) {
   const { data } = await sessionRequest(`/bookings/${id}/cancel`, { method: "PATCH" });
   return normalizeBookingsResponse([data.booking]).bookings[0];
+}
+
+export async function getBooking(id, options = {}) {
+  const { data } = await sessionRequest(`/bookings/${encodeURIComponent(id)}`, options);
+  return normalizeBookingsResponse([data.booking]).bookings[0];
+}
+
+export async function getBookingBill(id, options = {}) {
+  const { data } = await sessionRequest(`/bookings/${encodeURIComponent(id)}/bill`, options);
+  return data.bill;
+}
+
+export async function issueBookingPass(id, purpose) {
+  const { data } = await sessionRequest(`/bookings/${encodeURIComponent(id)}/qr`, { method: "POST", body: { purpose } });
+  return data;
 }
