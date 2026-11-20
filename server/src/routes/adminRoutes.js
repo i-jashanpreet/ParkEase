@@ -7,6 +7,10 @@ import Mall from "../models/Mall.js";
 import User from "../models/User.js";
 import AppError from "../utils/AppError.js";
 import { requireFields, validateObjectId } from "../utils/validators.js";
+import Booking from "../models/Booking.js";
+import mongoose from "mongoose";
+import { liveConfirmedBookings } from "../utils/bookingWindow.js";
+import RefreshToken from "../models/RefreshToken.js";
 
 const router = Router();
 const { ACTIVE, PENDING_APPROVAL, REJECTED, SUSPENDED } = USER_STATUS;
@@ -31,6 +35,31 @@ router.get("/mall-owners", async (req, res) => {
   if (status !== undefined) filter.status = status;
   const mallOwners = await User.find(filter).sort({ createdAt: -1, _id: -1 });
   res.json({ success: true, message: "Mall owners retrieved", data: { mallOwners } });
+});
+
+router.patch("/guards/:guardId/status", async (req, res) => {
+  const guardId = validateObjectId(req.params.guardId, "guardId");
+  if (!req.body || Object.keys(req.body).length !== 1 ||
+      ![USER_STATUS.ACTIVE, USER_STATUS.SUSPENDED].includes(req.body.status)) {
+    throw new AppError(400, "Set an active or suspended guard status", "INVALID_STATUS");
+  }
+  const user = await mongoose.connection.transaction(async (session) => {
+    const guard = await User.findOneAndUpdate(
+      { _id: guardId, role: ROLES.GUARD, status: req.body.status === USER_STATUS.ACTIVE ? USER_STATUS.SUSPENDED : USER_STATUS.ACTIVE },
+      { $set: { status: req.body.status }, $inc: { gateRevision: 1 } },
+      { session, new: true, runValidators: true },
+    );
+    if (!guard) return null;
+    if (req.body.status === USER_STATUS.SUSPENDED) await RefreshToken.updateMany(
+      { userId: guard._id, revokedAt: null }, { $set: { revokedAt: new Date() } }, { session });
+    return guard;
+  });
+  if (!user) {
+    if (!await User.exists({ _id: guardId, role: ROLES.GUARD }))
+      throw new AppError(404, "Guard not found", "GUARD_NOT_FOUND");
+    throw new AppError(409, "Guard already has this status", "INVALID_STATUS_TRANSITION");
+  }
+  res.json({ success: true, data: { user } });
 });
 
 router.patch("/mall-owners/:userId/status", async (req, res) => {
@@ -106,11 +135,17 @@ router.patch("/malls/:mallId/status", async (req, res) => {
     changes.rejectionReason = rejectionReason.trim();
   }
 
-  const mall = await Mall.findOneAndUpdate(
-    { _id: id, status: mallSourceStatus.get(status) },
-    { $set: changes },
-    { new: true, runValidators: true },
-  );
+  const mall = await mongoose.connection.transaction(async (session) => {
+    const current = await Mall.findOneAndUpdate({ _id: id, status: mallSourceStatus.get(status) },
+      { $inc: { bookingSequence: 1 } }, { new: true, session, timestamps: false });
+    if (!current) return null;
+    if (status === MALL_STATUS.INACTIVE && await Booking.exists({ mallId: id, $or: [
+      { status: "ACTIVE" }, liveConfirmedBookings(),
+    ] }).session(session)) throw new AppError(409, "Mall has active or upcoming bookings", "MALL_HAS_BOOKINGS");
+    current.set(changes);
+    await current.save({ session });
+    return current;
+  });
   if (!mall) {
     if (!(await Mall.exists({ _id: id }))) {
       throw new AppError(404, "Mall not found", "MALL_NOT_FOUND");
