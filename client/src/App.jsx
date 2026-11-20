@@ -21,6 +21,7 @@ import BookingDetailPage from "./pages/BookingDetailPage.jsx";
 import ProfilePage from "./pages/ProfilePage.jsx";
 import GuardsPage from "./pages/GuardsPage.jsx";
 import BookingBillPage from "./pages/BookingBillPage.jsx";
+import AnalyticsPage from "./pages/AnalyticsPage.jsx";
 
 function RoleDashboard() {
   const { user } = useAuth();
@@ -74,7 +75,7 @@ export default function App() {
           </Route>
           <Route element={<ProtectedRoute allowedRoles={[ROLES.MALL_OWNER, ROLES.ADMIN]} />}>
             <Route path="/dashboard/guards" element={<GuardsPage />} />
-            <Route path="/dashboard/analytics" element={<PendingPage title="Analytics" description="Reporting will be available when the analytics service is ready." />} />
+            <Route path="/dashboard/analytics" element={<AnalyticsPage />} />
           </Route>
           <Route element={<ProtectedRoute allowedRoles={[ROLES.MALL_OWNER]} />}>
             <Route path="/dashboard/malls/:id/edit" element={<PendingPage title="Edit mall" description="Mall profile editing is being built. You can still manage the parking layout from My malls." to="/dashboard?view=my-malls" action="Go to My malls" />} />
