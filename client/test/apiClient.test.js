@@ -13,7 +13,7 @@ import {
   STATUS_MESSAGES,
 } from "../src/services/apiError.js";
 import { getHealthStatus } from "../src/services/healthService.js";
-import { AUTH_SERVICE_STATUS, PENDING_AUTH_ROUTES } from "../src/services/authService.js";
+import { getSession, signIn, signOut, sessionRequest } from "../src/services/authService.js";
 import { MALL_SERVICE_STATUS, PENDING_MALL_ROUTES } from "../src/services/mallService.js";
 import { PARKING_SERVICE_STATUS, PENDING_PARKING_ROUTES } from "../src/services/parkingService.js";
 import { BOOKING_SERVICE_STATUS, PENDING_BOOKING_ROUTES } from "../src/services/bookingService.js";
@@ -261,17 +261,42 @@ test("Confirmed backend service: healthService interacts with /health", async ()
   }
 });
 
-test("Pending backend service contracts are properly defined and documented", () => {
-  assert.equal(AUTH_SERVICE_STATUS, "PENDING_BACKEND_IMPLEMENTATION");
-  assert.equal(PENDING_AUTH_ROUTES.LOGIN, "/auth/login");
-  assert.equal(PENDING_AUTH_ROUTES.REGISTER, "/auth/register");
-
-  assert.equal(MALL_SERVICE_STATUS, "PENDING_BACKEND_IMPLEMENTATION");
+test("Current service routes and status reflect implemented endpoints", () => {
+  assert.equal(MALL_SERVICE_STATUS, "AVAILABLE");
   assert.equal(PENDING_MALL_ROUTES.LIST_MALLS, "/malls");
 
-  assert.equal(PARKING_SERVICE_STATUS, "PENDING_BACKEND_IMPLEMENTATION");
+  assert.equal(PARKING_SERVICE_STATUS, "MALL_INVENTORY_AVAILABLE");
   assert.equal(PENDING_PARKING_ROUTES.LIST_SLOTS, "/slots");
 
-  assert.equal(BOOKING_SERVICE_STATUS, "PENDING_BACKEND_IMPLEMENTATION");
+  assert.equal(BOOKING_SERVICE_STATUS, "RESERVATIONS_AVAILABLE");
   assert.equal(PENDING_BOOKING_ROUTES.CREATE_BOOKING, "/bookings");
+});
+
+test("Public API requests have no bearer token; protected requests use the session token", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      json: async () => url.endsWith("/auth/login")
+        ? { data: { user: { _id: "driver-1", role: "USER" }, accessToken: "access-1" } }
+        : { data: { ok: true } },
+    };
+  };
+
+  try {
+    await signIn("login", { email: "driver@example.com", password: "Password123" });
+    assert.equal(getSession().user._id, "driver-1");
+    await apiClient.get("/malls");
+    await sessionRequest("/bookings", { method: "GET" });
+    assert.equal(calls[1].options.headers.Authorization, undefined);
+    assert.equal(calls[2].options.headers.Authorization, "Bearer access-1");
+    assert.equal(calls[2].options.credentials, "include");
+    await signOut();
+    assert.equal(getSession().user, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
