@@ -5,6 +5,9 @@ import { MALL_STATUS } from "../constants/statuses.js";
 import Mall from "../models/Mall.js";
 import AppError from "../utils/AppError.js";
 import { requireFields, validateObjectId } from "../utils/validators.js";
+import Booking from "../models/Booking.js";
+import mongoose from "mongoose";
+import { checkOperatingHours, liveConfirmedBookings } from "../utils/bookingWindow.js";
 
 const router = Router();
 
@@ -46,6 +49,55 @@ router.post("/", authenticate, requireApprovedOwner, async (req, res) => {
 });
 
 const publicMallFields = "name city address description hourlyRatePaise openingTime closingTime status";
+
+router.patch("/:mallId", authenticate, requireApprovedOwner, async (req, res) => {
+  const id = validateObjectId(req.params.mallId, "mallId");
+  const allowed = ["description", "openingTime", "closingTime", "hourlyRatePaise", "name", "city", "address"];
+  if (!req.body || Array.isArray(req.body) || typeof req.body !== "object" ||
+      !Object.keys(req.body).length || Object.keys(req.body).some((key) => !allowed.includes(key)))
+    throw new AppError(400, "Invalid mall fields", "INVALID_MALL");
+  const changes = {};
+  for (const field of allowed) if (req.body[field] !== undefined) changes[field] = req.body[field];
+  for (const [field, value] of Object.entries(changes)) {
+    if (field === "hourlyRatePaise") {
+      if (!Number.isInteger(value) || value < 0 || value > 1_000_000)
+        throw new AppError(400, "Hourly rate must be an integer number of paise", "INVALID_MALL");
+    } else if (typeof value !== "string" || (field !== "description" && !value.trim())) {
+      throw new AppError(400, `Invalid ${field}`, "INVALID_MALL");
+    }
+  }
+  const limits = { name: 120, city: 80, address: 250, description: 500 };
+  for (const [field, max] of Object.entries(limits)) if (changes[field]?.length > max)
+    throw new AppError(400, `Invalid ${field}`, "INVALID_MALL");
+  for (const field of ["openingTime", "closingTime"]) if (changes[field] && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(changes[field]))
+    throw new AppError(400, `Invalid ${field}`, "INVALID_MALL");
+  const identity = ["name", "city", "address"].some((field) => field in changes);
+  const schedule = ["openingTime", "closingTime"].some((field) => field in changes);
+  const mall = await mongoose.connection.transaction(async (session) => {
+    const current = await Mall.findOneAndUpdate({ _id: id, ownerId: req.user._id, status: "APPROVED" },
+      { $inc: { bookingSequence: 1 } }, { session, new: true, timestamps: false });
+    if (!current) throw new AppError(404, "Mall not found", "MALL_NOT_FOUND");
+    const outstanding = { mallId: id, $or: [{ status: "ACTIVE" }, liveConfirmedBookings()] };
+    if (identity && await Booking.exists(outstanding).session(session))
+      throw new AppError(409, "Resolve outstanding visits and reservations before changing mall identity", "MALL_HAS_BOOKINGS");
+    if (schedule) {
+      const proposed = { openingTime: changes.openingTime ?? current.openingTime,
+        closingTime: changes.closingTime ?? current.closingTime };
+      for await (const booking of Booking.find(outstanding).select("startTime endTime").session(session).cursor()) {
+        try { checkOperatingHours(proposed, booking); }
+        catch (error) {
+          if (error.code !== "OUTSIDE_MALL_HOURS") throw error;
+          throw new AppError(409, "New hours would invalidate an outstanding visit or reservation", "MALL_SCHEDULE_CONFLICT");
+        }
+      }
+    }
+    if (identity) changes.status = "PENDING";
+    current.set(changes);
+    await current.save({ session });
+    return current;
+  });
+  res.set("Cache-Control", "no-store").json({ success: true, data: { mall } });
+});
 
 function literalFilter(value, field, exact = false) {
   if (value === undefined) return null;

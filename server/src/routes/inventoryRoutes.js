@@ -3,7 +3,7 @@ import { Router } from "express";
 import authenticate from "../middleware/authenticate.js";
 import { requireApprovedOwner } from "../middleware/authorize.js";
 import Booking from "../models/Booking.js";
-import { bookingWindow, checkOperatingHours, overlappingBookings } from "../utils/bookingWindow.js";
+import { bookingWindow, checkOperatingHours, liveConfirmedBookings, overlappingBookings } from "../utils/bookingWindow.js";
 import Mall from "../models/Mall.js";
 import AppError from "../utils/AppError.js";
 import { validateObjectId } from "../utils/validators.js";
@@ -103,7 +103,7 @@ async function update(req, res, changes) {
         }
       }
       if (before.size && await Booking.exists({
-        mallId: mall._id, status: "CONFIRMED", endTime: { $gt: new Date() },
+        mallId: mall._id, $or: [{ status: "ACTIVE" }, liveConfirmedBookings()],
         bayId: { $in: [...before.keys()] },
       }).session(session)) {
         throw new AppError(409, "This change affects a bay with an active or upcoming reservation.", "BAY_HAS_RESERVATIONS");
@@ -154,6 +154,7 @@ router.get("/:mallId/slots", async (req, res) => {
   const window = req.query.startTime !== undefined || req.query.endTime !== undefined ? bookingWindow(req.query) : null;
   if (window) checkOperatingHours(mall, window);
   const now = new Date();
+  const occupied = new Set(await Booking.distinct("bayId", { mallId: id, status: "ACTIVE" }));
   const reserved = new Set(await Booking.distinct("bayId", overlappingBookings(id, window ?? { startTime: now, endTime: now })));
   const floors = mall.parkingPublished?.floors ?? [];
   const slots = floors.flatMap((floor) => floor.rows.flat().filter(Boolean).map((bay) => ({
@@ -161,7 +162,7 @@ router.get("/:mallId/slots", async (req, res) => {
     slotNumber: bay.code,
     floor: floor.name,
     vehicleType: bay.vehicleType,
-    status: bay.status === "AVAILABLE" && reserved.has(bay.id) ? "RESERVED" : bay.status,
+    status: occupied.has(bay.id) ? "OCCUPIED" : bay.status === "AVAILABLE" && reserved.has(bay.id) ? "RESERVED" : bay.status,
     isElectric: bay.electric,
     isAccessible: bay.accessible,
     hourlyRate: mall.hourlyRatePaise / 100,
