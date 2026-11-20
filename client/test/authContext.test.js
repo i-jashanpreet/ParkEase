@@ -118,6 +118,22 @@ test("Logout clears access to protected requests", async () => {
   }
 });
 
+test("Failed logout still removes privileged content from this browser", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (url.endsWith("/auth/login")) return response({ data: { user, accessToken: "secret" } });
+    throw new TypeError("Failed to fetch");
+  };
+  try {
+    await signIn("login", { email: "driver@example.com", password: "Password123" });
+    await assert.rejects(signOut());
+    assert.equal(getSession().user, null);
+    await assert.rejects(sessionRequest("/bookings"), /Sign in to continue/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("ProtectedRoute hides loading and signed-out content", () => {
   const loading = renderRoute({ user: null, isAuthenticated: false, isLoading: true });
   assert.ok(loading.includes("Verifying authentication session"));

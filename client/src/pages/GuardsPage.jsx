@@ -67,7 +67,7 @@ export default function GuardsPage() {
     {error && <p className="form-error-text" role="alert">{error} <Button onClick={refresh}>Retry</Button></p>}
     {notice && <p role="status">{notice}</p>}
     <label>Selected mall <select value={mallId} onChange={(event) => { setMallId(event.target.value); setGuards([]); }}>
-      <option value="">Choose a mall</option>{malls.map((mall) => <option key={mall._id} value={mall._id}>{mall.name}</option>)}
+      <option value="">Choose a mall</option>{malls.map((mall) => <option key={mall._id || mall.id} value={mall._id || mall.id}>{mall.name}</option>)}
     </select></label>
     {mallId && <>
       <Card title="Assigned guards">{guards.length === 0 ? <p>No guards assigned.</p> : guards.map(({ user: guard, assignment }) => <div key={assignment.id} className="section-title-row">
