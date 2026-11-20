@@ -18,6 +18,7 @@ import DashboardPage from "./pages/DashboardPage.jsx";
 import NotFoundPage from "./pages/NotFoundPage.jsx";
 import PendingPage from "./pages/PendingPage.jsx";
 import BookingDetailPage from "./pages/BookingDetailPage.jsx";
+import ProfilePage from "./pages/ProfilePage.jsx";
 
 function RoleDashboard() {
   const { user } = useAuth();
@@ -80,7 +81,7 @@ export default function App() {
             <Route path="/dashboard/operations" element={<PendingPage title="Gate console" description="Gate operations are being built. An assigned guard will be able to scan passes here." />} />
             <Route path="/dashboard/activity" element={<PendingPage title="Recent activity" description="Gate activity will appear here when operations are available." />} />
           </Route>
-          <Route path="/dashboard/profile" element={<PendingPage title="Profile" description="Profile editing is being built. Your account details are available in the navigation." />} />
+          <Route path="/dashboard/profile" element={<ProfilePage />} />
         </Route>
       </Routes>
     </AuthProvider>
