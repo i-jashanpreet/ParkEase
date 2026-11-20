@@ -407,3 +407,8 @@ textarea { resize: vertical; }
   .reservation-sheet.modal-backdrop, .modal-backdrop:has(.reservation-sheet) { align-items: flex-end; padding: 0; }
   .reservation-sheet.modal-container, .modal-backdrop:has(.reservation-sheet) .modal-container { width: 100%; max-width: none; border-radius: 20px 20px 0 0; }
 }
+@media print {
+  .dashboard-sidebar, .dashboard-header, .workspace-footer, .receipt-actions, .skip-link { display: none !important; }
+  .dashboard-body, .dashboard-main, .receipt-page { margin: 0 !important; padding: 0 !important; width: 100% !important; }
+  .receipt-page .card { box-shadow: none; border: 0; break-inside: avoid; }
+}

@@ -68,8 +68,8 @@ export async function signOut() {
       method: "POST",
       headers: cookieHeaders,
     }));
-    publish(null);
   } finally {
+    publish(null);
     signingOut = false;
   }
 }
