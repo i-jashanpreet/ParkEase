@@ -80,6 +80,7 @@ export default function OwnerMalls() {
         <div className="location-facts"><span><Icon name="clock" size={16} />{mall.openingTime} – {mall.closingTime}</span><strong>{formatRate.format(mall.hourlyRatePaise / 100)} / hr</strong></div>
         {mall.rejectionReason && <div className="review-reason"><strong>Review feedback</strong><p>{mall.rejectionReason}</p></div>}
         {mall.status === "APPROVED" && <Button to={`/dashboard/malls/${mall._id}/inventory`}>Manage parking layout</Button>}
+        {mall.status === "APPROVED" && <Button to={`/dashboard/malls/${mall._id}/edit`} variant="outline" size="sm">Edit mall listing</Button>}
         {mall.status === "APPROVED" && <Button to={`/malls/${mall._id}`} variant="outline" size="sm" icon={<Icon name="arrow" size={16} />}>View public listing</Button>}
       </Card>)}</div>}
       {view === "submit" && <div className="owner-submission-layout"><Card title="Mall details" subtitle="Your listing will be reviewed before it goes live.">
