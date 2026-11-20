@@ -8,6 +8,7 @@ import Mall from "../models/Mall.js";
 import AppError from "../utils/AppError.js";
 import { bookingWindow, checkOperatingHours, overlappingBookings } from "../utils/bookingWindow.js";
 import { validateObjectId } from "../utils/validators.js";
+import { issueQR } from "../services/qrService.js";
 
 const router = Router();
 router.use(authenticate, requireActiveAccount, authorize(ROLES.USER), (_req, res, next) => {
@@ -26,6 +27,14 @@ function serialize(booking) {
 router.get("/", async (req, res) => {
   const bookings = await Booking.find({ driverId: req.user._id }).sort({ startTime: -1, _id: -1 }).lean();
   res.json({ success: true, data: { bookings: bookings.map(serialize) } });
+});
+
+router.post("/:id/qr", async (req, res) => {
+  const bookingId = validateObjectId(req.params.id, "bookingId");
+  if (!req.body || Object.keys(req.body).some((key) => key !== "purpose"))
+    throw new AppError(400, "Unexpected QR fields", "INVALID_BODY");
+  const result = await issueQR(bookingId, req.user._id, req.body.purpose);
+  res.status(201).json({ success: true, data: result });
 });
 
 router.post("/", async (req, res) => {
